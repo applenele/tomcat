@@ -33,6 +33,7 @@ import org.apache.catalina.Session;
 import org.apache.catalina.ha.ClusterManager;
 import org.apache.catalina.ha.ClusterMessage;
 import org.apache.catalina.session.ManagerBase;
+import org.apache.catalina.tribes.Channel;
 import org.apache.catalina.tribes.Member;
 import org.apache.catalina.tribes.io.ReplicationStream;
 import org.apache.juli.logging.Log;
@@ -86,7 +87,7 @@ public class DeltaManager extends ClusterManagerBase{
             new ArrayList<>();
     private boolean receiverQueue = false ;
     private boolean stateTimestampDrop = true ;
-    private long stateTransferCreateSendTime;
+    private volatile long stateTransferCreateSendTime;
 
     // -------------------------------------------------------- stats attributes
 
@@ -295,8 +296,8 @@ public class DeltaManager extends ClusterManagerBase{
     }
 
     /**
-     * Set that state transfered is complete
-     * @param stateTransfered Fag value
+     * Set that state transferred is complete
+     * @param stateTransfered Flag value
      */
     public void setStateTransfered(boolean stateTransfered) {
         this.stateTransfered = stateTransfered;
@@ -746,7 +747,7 @@ public class DeltaManager extends ClusterManagerBase{
                 synchronized(receivedMessageQueue) {
                      receiverQueue = true ;
                 }
-                cluster.send(msg, mbr);
+                cluster.send(msg, mbr, Channel.SEND_OPTIONS_ASYNCHRONOUS);
                 if (log.isInfoEnabled())
                     log.info(sm.getString("deltaManager.waitForSessionState",
                             getName(), mbr, Integer.valueOf(getStateTransferTimeout())));
@@ -757,16 +758,12 @@ public class DeltaManager extends ClusterManagerBase{
                 synchronized(receivedMessageQueue) {
                     for (SessionMessage smsg : receivedMessageQueue) {
                         if (!stateTimestampDrop) {
-                            messageReceived(smsg,
-                                    smsg.getAddress() != null ? smsg.getAddress() : null);
+                            messageReceived(smsg, smsg.getAddress());
                         } else {
                             if (smsg.getEventType() != SessionMessage.EVT_GET_ALL_SESSIONS &&
                                     smsg.getTimestamp() >= stateTransferCreateSendTime) {
                                 // FIXME handle EVT_GET_ALL_SESSIONS later
-                                messageReceived(smsg,
-                                        smsg.getAddress() != null ?
-                                                smsg.getAddress() :
-                                                null);
+                                messageReceived(smsg, smsg.getAddress());
                             } else {
                                 if (log.isWarnEnabled()) {
                                     log.warn(sm.getString("deltaManager.dropMessage",
@@ -805,8 +802,8 @@ public class DeltaManager extends ClusterManagerBase{
     }
 
     /**
-     * Wait that cluster session state is transfered or timeout after 60 Sec
-     * With stateTransferTimeout == -1 wait that backup is transfered (forever mode)
+     * Wait that cluster session state is transferred or timeout after 60 Sec
+     * With stateTransferTimeout == -1 wait that backup is transferred (forever mode)
      * @param beforeSendTime Start instant of the operation
      */
     protected void waitForSendAllSessions(long beforeSendTime) {
@@ -814,7 +811,7 @@ public class DeltaManager extends ClusterManagerBase{
         long reqNow = reqStart ;
         boolean isTimeout = false;
         if(getStateTransferTimeout() > 0) {
-            // wait that state is transfered with timeout check
+            // wait that state is transferred with timeout check
             do {
                 try {
                     Thread.sleep(100);
@@ -826,7 +823,7 @@ public class DeltaManager extends ClusterManagerBase{
             } while ((!getStateTransfered()) && (!isTimeout) && (!isNoContextManagerReceived()));
         } else {
             if(getStateTransferTimeout() == -1) {
-                // wait that state is transfered
+                // wait that state is transferred
                 do {
                     try {
                         Thread.sleep(100);
@@ -917,7 +914,7 @@ public class DeltaManager extends ClusterManagerBase{
                     break;
             } //switch
 
-            messageReceived(msg, msg.getAddress() != null ? msg.getAddress() : null);
+            messageReceived(msg, msg.getAddress());
         }
     }
 
@@ -1200,7 +1197,7 @@ public class DeltaManager extends ClusterManagerBase{
 
 
     /**
-     * handle receive session state is complete transfered
+     * handle receive session state is complete transferred
      * @param msg Session message
      * @param sender Member which sent the message
      */
@@ -1226,7 +1223,12 @@ public class DeltaManager extends ClusterManagerBase{
         counterReceive_EVT_SESSION_DELTA++;
         byte[] delta = msg.getSession();
         DeltaSession session = (DeltaSession) findSession(msg.getSessionID());
-        if (session != null) {
+        if (session == null) {
+            if (log.isDebugEnabled()) {
+                log.debug(sm.getString("deltaManager.receiveMessage.delta.unknown",
+                        getName(), msg.getSessionID()));
+            }
+        } else {
             if (log.isDebugEnabled()) {
                 log.debug(sm.getString("deltaManager.receiveMessage.delta",
                         getName(), msg.getSessionID()));
@@ -1292,7 +1294,6 @@ public class DeltaManager extends ClusterManagerBase{
                     getName(), msg.getSessionID()));
         }
         DeltaSession session = (DeltaSession) createEmptySession();
-        session.setManager(this);
         session.setValid(true);
         session.setPrimarySession(false);
         session.setCreationTime(msg.getTimestamp());
@@ -1301,7 +1302,6 @@ public class DeltaManager extends ClusterManagerBase{
         session.setMaxInactiveInterval(getContext().getSessionTimeout() * 60, false);
         session.access();
         session.setId(msg.getSessionID(), notifySessionListenersOnReplication);
-        session.resetDeltaRequest();
         session.endAccess();
 
     }
@@ -1331,7 +1331,7 @@ public class DeltaManager extends ClusterManagerBase{
      * handle receive that other node want all sessions ( restart )
      * a) send all sessions with one message
      * b) send session at blocks
-     * After sending send state is complete transfered
+     * After sending send state is complete transferred
      * @param msg Session message
      * @param sender Member which sent the message
      * @throws IOException IO error sending messages
@@ -1369,8 +1369,8 @@ public class DeltaManager extends ClusterManagerBase{
         }//end if
 
         SessionMessage newmsg = new SessionMessageImpl(name,
-                SessionMessage.EVT_ALL_SESSION_TRANSFERCOMPLETE, null, "SESSION-STATE-TRANSFERED",
-                "SESSION-STATE-TRANSFERED" + getName());
+                SessionMessage.EVT_ALL_SESSION_TRANSFERCOMPLETE, null, "SESSION-STATE-TRANSFERRED",
+                "SESSION-STATE-TRANSFERRED" + getName());
         newmsg.setTimestamp(findSessionTimestamp);
         if (log.isDebugEnabled()) {
             log.debug(sm.getString("deltaManager.createMessage.allSessionTransfered",getName()));
@@ -1430,7 +1430,8 @@ public class DeltaManager extends ClusterManagerBase{
             log.debug(sm.getString("deltaManager.createMessage.allSessionData", getName()));
         }
         counterSend_EVT_ALL_SESSION_DATA++;
-        cluster.send(newmsg, sender);
+        int sendOptions = Channel.SEND_OPTIONS_SYNCHRONIZED_ACK|Channel.SEND_OPTIONS_USE_ACK;
+        cluster.send(newmsg, sender, sendOptions);
     }
 
     @Override

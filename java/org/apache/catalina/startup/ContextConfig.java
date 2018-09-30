@@ -182,7 +182,7 @@ public class ContextConfig implements LifecycleListener {
     /**
      * The Context we are associated with.
      */
-    protected Context context = null;
+    protected volatile Context context = null;
 
 
     /**
@@ -342,20 +342,10 @@ public class ContextConfig implements LifecycleListener {
     protected void authenticatorConfig() {
 
         LoginConfig loginConfig = context.getLoginConfig();
-
-        SecurityConstraint constraints[] = context.findConstraints();
-        if (context.getIgnoreAnnotations() &&
-                (constraints == null || constraints.length ==0) &&
-                !context.getPreemptiveAuthentication())  {
-            return;
-        } else {
-            if (loginConfig == null) {
-                // Not metadata-complete or security constraints present, need
-                // an authenticator to support @ServletSecurity annotations
-                // and/or constraints
-                loginConfig = DUMMY_LOGIN_CONFIG;
-                context.setLoginConfig(loginConfig);
-            }
+        if (loginConfig == null) {
+            // Need an authenticator to support HttpServletRequest.login()
+            loginConfig = DUMMY_LOGIN_CONFIG;
+            context.setLoginConfig(loginConfig);
         }
 
         // Has an authenticator been configured already?
@@ -723,7 +713,7 @@ public class ContextConfig implements LifecycleListener {
     /**
      * Process a "init" event for this Context.
      */
-    protected void init() {
+    protected synchronized void init() {
         // Called from StandardContext.init()
 
         Digester contextDigester = createContextDigester();

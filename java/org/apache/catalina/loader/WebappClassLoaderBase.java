@@ -344,7 +344,8 @@ public abstract class WebappClassLoaderBase extends URLClassLoader
     private boolean clearReferencesStopTimerThreads = false;
 
     /**
-     * Should Tomcat call {@link org.apache.juli.logging.LogFactory#release()}
+     * Should Tomcat call
+     * {@link org.apache.juli.logging.LogFactory#release(ClassLoader)}
      * when the class loader is stopped? If not specified, the default value
      * of <code>true</code> is used. Changing the default setting is likely to
      * lead to memory leaks and other issues.
@@ -360,6 +361,18 @@ public abstract class WebappClassLoaderBase extends URLClassLoader
      * expire however, on a busy system that might not happen for some time.
      */
     private boolean clearReferencesHttpClientKeepAliveThread = true;
+
+    /**
+     * Should Tomcat attempt to clear references to classes loaded by this class
+     * loader from the ObjectStreamClass caches?
+     */
+    private boolean clearReferencesObjectStreamClassCaches = true;
+
+    /**
+     * Should Tomcat skip the memory leak checks when the web application is
+     * stopped as part of the process of shutting down the JVM?
+     */
+    private boolean skipMemoryLeakChecksOnJvmShutdown = false;
 
     /**
      * Holds the class file transformers decorating this class loader. The
@@ -593,6 +606,27 @@ public abstract class WebappClassLoaderBase extends URLClassLoader
             boolean clearReferencesHttpClientKeepAliveThread) {
         this.clearReferencesHttpClientKeepAliveThread =
             clearReferencesHttpClientKeepAliveThread;
+    }
+
+
+    public boolean getClearReferencesObjectStreamClassCaches() {
+        return clearReferencesObjectStreamClassCaches;
+    }
+
+
+    public void setClearReferencesObjectStreamClassCaches(
+            boolean clearReferencesObjectStreamClassCaches) {
+        this.clearReferencesObjectStreamClassCaches = clearReferencesObjectStreamClassCaches;
+    }
+
+
+    public boolean getSkipMemoryLeakChecksOnJvmShutdown() {
+        return skipMemoryLeakChecksOnJvmShutdown;
+    }
+
+
+    public void setSkipMemoryLeakChecksOnJvmShutdown(boolean skipMemoryLeakChecksOnJvmShutdown) {
+        this.skipMemoryLeakChecksOnJvmShutdown = skipMemoryLeakChecksOnJvmShutdown;
     }
 
 
@@ -1507,11 +1541,31 @@ public abstract class WebappClassLoaderBase extends URLClassLoader
      */
     protected void clearReferences() {
 
+        // If the JVM is shutting down, skip the memory leak checks
+        if (skipMemoryLeakChecksOnJvmShutdown
+            && !resources.getContext().getParent().getState().isAvailable()) {
+            // During reloading / redeployment the parent is expected to be
+            // available. Parent is not available so this might be a JVM
+            // shutdown.
+            try {
+                Thread dummyHook = new Thread();
+                Runtime.getRuntime().addShutdownHook(dummyHook);
+                Runtime.getRuntime().removeShutdownHook(dummyHook);
+            } catch (IllegalStateException ise) {
+                return;
+            }
+        }
+
         // De-register any remaining JDBC drivers
         clearReferencesJdbc();
 
         // Stop any threads the web application started
         clearReferencesThreads();
+
+        // Clear any references retained in the serialization caches
+        if (clearReferencesObjectStreamClassCaches) {
+            clearReferencesObjectStreamClassCaches();
+        }
 
         // Check for leaks triggered by ThreadLocals loaded by this class loader
         checkThreadLocalsForLeaks();
@@ -1792,7 +1846,9 @@ public abstract class WebappClassLoaderBase extends URLClassLoader
                 synchronized(queue) {
                     newTasksMayBeScheduledField.setBoolean(thread, false);
                     clearMethod.invoke(queue);
-                    queue.notify();  // In case queue was already empty.
+                    // In case queue was already empty. Should only be one
+                    // thread waiting but use notifyAll() to be safe.
+                    queue.notifyAll();
                 }
 
             }catch (NoSuchFieldException nfe){
@@ -2064,16 +2120,18 @@ public abstract class WebappClassLoaderBase extends URLClassLoader
             stubField.setAccessible(true);
 
             // Clear the objTable map
-            Class<?> objectTableClass =
-                Class.forName("sun.rmi.transport.ObjectTable");
+            Class<?> objectTableClass = Class.forName("sun.rmi.transport.ObjectTable");
             Field objTableField = objectTableClass.getDeclaredField("objTable");
             objTableField.setAccessible(true);
             Object objTable = objTableField.get(null);
             if (objTable == null) {
                 return;
             }
+            Field tableLockField = objectTableClass.getDeclaredField("tableLock");
+            tableLockField.setAccessible(true);
+            Object tableLock = tableLockField.get(null);
 
-            synchronized (objTable) {
+            synchronized (tableLock) {
                 // Iterate over the values in the table
                 if (objTable instanceof Map<?,?>) {
                     Iterator<?> iter = ((Map<?,?>) objTable).values().iterator();
@@ -2125,6 +2183,36 @@ public abstract class WebappClassLoaderBase extends URLClassLoader
             } else {
                 // Re-throw all other exceptions
                 throw e;
+            }
+        }
+    }
+
+
+    private void clearReferencesObjectStreamClassCaches() {
+        try {
+            Class<?> clazz = Class.forName("java.io.ObjectStreamClass$Caches");
+            clearCache(clazz, "localDescs");
+            clearCache(clazz, "reflectors");
+        } catch (ReflectiveOperationException | SecurityException | ClassCastException e) {
+            log.warn(sm.getString(
+                    "webappClassLoader.clearObjectStreamClassCachesFail", getContextName()), e);
+        }
+    }
+
+
+    private void clearCache(Class<?> target, String mapName)
+            throws ReflectiveOperationException, SecurityException, ClassCastException {
+        Field f = target.getDeclaredField(mapName);
+        f.setAccessible(true);
+        Map<?,?> map = (Map<?,?>) f.get(null);
+        Iterator<?> keys = map.keySet().iterator();
+        while (keys.hasNext()) {
+            Object key = keys.next();
+            if (key instanceof Reference) {
+                Object clazz = ((Reference<?>) key).get();
+                if (loadedByThisOrChild(clazz)) {
+                    keys.remove();
+                }
             }
         }
     }
@@ -2198,9 +2286,10 @@ public abstract class WebappClassLoaderBase extends URLClassLoader
             if (transformers.size() > 0) {
                 // If the resource is a class just being loaded, decorate it
                 // with any attached transformers
-                String className = name.endsWith(CLASS_FILE_SUFFIX) ?
-                        name.substring(0, name.length() - CLASS_FILE_SUFFIX.length()) : name;
-                String internalName = className.replace(".", "/");
+
+                // Ignore leading '/' and trailing CLASS_FILE_SUFFIX
+                // Should be cheaper than replacing '.' by '/' in class name.
+                String internalName = path.substring(1, path.length() - CLASS_FILE_SUFFIX.length());
 
                 for (ClassFileTransformer transformer : this.transformers) {
                     try {

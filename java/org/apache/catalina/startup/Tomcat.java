@@ -134,7 +134,7 @@ import org.apache.tomcat.util.res.StringManager;
  * see setters for doc. It can be used for simple tests and
  * demo.
  *
- * @see <a href="http://svn.apache.org/repos/asf/tomcat/trunk/test/org/apache/catalina/startup/TestTomcat.java">TestTomcat</a>
+ * @see <a href="https://svn.apache.org/repos/asf/tomcat/trunk/test/org/apache/catalina/startup/TestTomcat.java">TestTomcat</a>
  * @author Costin Manolache
  */
 public class Tomcat {
@@ -157,6 +157,8 @@ public class Tomcat {
     private final Map<String, String> userPass = new HashMap<>();
     private final Map<String, List<String>> userRoles = new HashMap<>();
     private final Map<String, Principal> userPrincipals = new HashMap<>();
+
+    private boolean addDefaultWebXmlToWebapp = true;
 
     public Tomcat() {
         ExceptionUtils.preload();
@@ -218,9 +220,8 @@ public class Tomcat {
      * @param docBase Base directory for the context, for static files.
      *  Must exist, relative to the server home
      * @return the deployed context
-     * @throws ServletException if a deployment error occurs
      */
-    public Context addWebapp(String contextPath, String docBase) throws ServletException {
+    public Context addWebapp(String contextPath, String docBase) {
         return addWebapp(getHost(), contextPath, docBase);
     }
 
@@ -624,12 +625,15 @@ public class Tomcat {
         Context ctx = createContext(host, contextPath);
         ctx.setPath(contextPath);
         ctx.setDocBase(docBase);
-        ctx.addLifecycleListener(getDefaultWebXmlListener());
+
+        if (addDefaultWebXmlToWebapp)
+            ctx.addLifecycleListener(getDefaultWebXmlListener());
+
         ctx.setConfigFile(getWebappConfigFile(docBase, contextPath));
 
         ctx.addLifecycleListener(config);
 
-        if (config instanceof ContextConfig) {
+        if (addDefaultWebXmlToWebapp && (config instanceof ContextConfig)) {
             // prevent it from looking ( if it finds one - it'll have dup error )
             ((ContextConfig) config).setDefaultWebXml(noDefaultWebXmlPath());
         }
@@ -804,6 +808,24 @@ public class Tomcat {
     }
 
 
+    /**
+     * By default, when calling addWebapp() to create a Context, the settings from
+     * from the default web.xml are added to the context.  Calling this method with
+     * a <code>false</code> value prior to calling addWebapp() allows to opt out of
+     * the default settings. In that event you will need to add the configurations
+     * yourself,  either programmatically or by using web.xml deployment descriptors.
+     * @param addDefaultWebXmlToWebapp <code>false</code> will prevent the class from
+     *                                 automatically adding the default settings when
+     *                                 calling addWebapp().
+     *                                 <code>true</code> will add the default settings
+     *                                 and is the default behavior.
+     * @see #addWebapp(Host, String, String, LifecycleListener)
+     */
+    public void setAddDefaultWebXmlToWebapp(boolean addDefaultWebXmlToWebapp){
+        this.addDefaultWebXmlToWebapp = addDefaultWebXmlToWebapp;
+    }
+
+
     /*
      * Uses essentially the same logic as {@link ContainerBase#logName()}.
      */
@@ -966,18 +988,20 @@ public class Tomcat {
                 Context context = (Context) event.getLifecycle();
                 if (event.getType().equals(Lifecycle.CONFIGURE_START_EVENT)) {
                     context.setConfigured(true);
-                }
-                // LoginConfig is required to process @ServletSecurity
-                // annotations
-                if (context.getLoginConfig() == null) {
-                    context.setLoginConfig(
-                            new LoginConfig("NONE", null, null, null));
-                    context.getPipeline().addValve(new NonLoginAuthenticator());
+
+                    // Process annotations
+                    WebAnnotationSet.loadApplicationAnnotations(context);
+
+                    // LoginConfig is required to process @ServletSecurity
+                    // annotations
+                    if (context.getLoginConfig() == null) {
+                        context.setLoginConfig(new LoginConfig("NONE", null, null, null));
+                        context.getPipeline().addValve(new NonLoginAuthenticator());
+                    }
                 }
             } catch (ClassCastException e) {
             }
         }
-
     }
 
 

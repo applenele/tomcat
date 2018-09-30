@@ -35,8 +35,6 @@ import javax.servlet.ServletRequest;
 import javax.servlet.ServletResponse;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
-
-import org.apache.catalina.Globals;
 /**
  * Filter to process SSI requests within a webpage. Mapped to a content types
  * from within web.xml.
@@ -92,13 +90,9 @@ public class SSIFilter extends GenericFilter {
         HttpServletRequest req = (HttpServletRequest)request;
         HttpServletResponse res = (HttpServletResponse)response;
 
-        // indicate that we're in SSI processing
-        req.setAttribute(Globals.SSI_FLAG_ATTR, "true");
-
         // setup to capture output
         ByteArrayServletOutputStream basos = new ByteArrayServletOutputStream();
-        ResponseIncludeWrapper responseIncludeWrapper =
-                new ResponseIncludeWrapper(getServletContext(),req, res, basos);
+        ResponseIncludeWrapper responseIncludeWrapper = new ResponseIncludeWrapper(res, basos);
 
         // process remainder of filter chain
         chain.doFilter(req, responseIncludeWrapper);
@@ -111,7 +105,7 @@ public class SSIFilter extends GenericFilter {
         String contentType = responseIncludeWrapper.getContentType();
 
         // is this an allowed type for SSI processing?
-        if (contentTypeRegEx.matcher(contentType).matches()) {
+        if (contentType != null && contentTypeRegEx.matcher(contentType).matches()) {
             String encoding = res.getCharacterEncoding();
 
             // set up SSI processing

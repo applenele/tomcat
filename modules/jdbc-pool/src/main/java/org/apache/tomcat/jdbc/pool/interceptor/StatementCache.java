@@ -18,24 +18,28 @@ package org.apache.tomcat.jdbc.pool.interceptor;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
-import java.sql.Statement;
+import java.sql.SQLException;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+
+import javax.management.ObjectName;
 
 import org.apache.juli.logging.Log;
 import org.apache.juli.logging.LogFactory;
 import org.apache.tomcat.jdbc.pool.ConnectionPool;
 import org.apache.tomcat.jdbc.pool.PoolProperties.InterceptorProperty;
 import org.apache.tomcat.jdbc.pool.PooledConnection;
+import org.apache.tomcat.jdbc.pool.jmx.JmxUtil;
 
 /**
  * Interceptor that caches {@code PreparedStatement} and/or
  * {@code CallableStatement} instances on a connection.
  */
-public class StatementCache extends StatementDecoratorInterceptor {
+public class StatementCache extends StatementDecoratorInterceptor implements StatementCacheMBean {
     private static final Log log = LogFactory.getLog(StatementCache.class);
     protected static final String[] ALL_TYPES = new String[] {PREPARE_STATEMENT,PREPARE_CALL};
     protected static final String[] CALLABLE_TYPE = new String[] {PREPARE_CALL};
@@ -51,15 +55,19 @@ public class StatementCache extends StatementDecoratorInterceptor {
     private PooledConnection pcon;
     private String[] types;
 
+    private ObjectName oname = null;
 
+    @Override
     public boolean isCachePrepared() {
         return cachePrepared;
     }
 
+    @Override
     public boolean isCacheCallable() {
         return cacheCallable;
     }
 
+    @Override
     public int getMaxCacheSize() {
         return maxCacheSize;
     }
@@ -68,6 +76,7 @@ public class StatementCache extends StatementDecoratorInterceptor {
         return types;
     }
 
+    @Override
     public AtomicInteger getCacheSize() {
         return cacheSize;
     }
@@ -120,6 +129,10 @@ public class StatementCache extends StatementDecoratorInterceptor {
         if (parent==null) {
             cacheSize = null;
             this.pcon = null;
+            if (oname != null) {
+                JmxUtil.unregisterJmx(oname);
+                oname = null;
+            }
         } else {
             cacheSize = cacheSizeMap.get(parent);
             this.pcon = con;
@@ -127,6 +140,10 @@ public class StatementCache extends StatementDecoratorInterceptor {
                 ConcurrentHashMap<CacheKey,CachedStatement> cache =
                         new ConcurrentHashMap<>();
                 pcon.getAttributes().put(STATEMENT_CACHE_ATTR,cache);
+            }
+            if (oname == null) {
+                String keyprop = ",JdbcInterceptor=" + getClass().getSimpleName();
+                oname = JmxUtil.registerJmx(pcon.getObjectName(), keyprop, this);
             }
         }
     }
@@ -159,7 +176,7 @@ public class StatementCache extends StatementDecoratorInterceptor {
         boolean process = process(this.types, method, false);
         if (process) {
             Object result = null;
-            CachedStatement statementProxy = new CachedStatement((Statement)statement,sql);
+            CachedStatement statementProxy = new CachedStatement((PreparedStatement)statement,sql);
             result = constructor.newInstance(new Object[] { statementProxy });
             statementProxy.setActualProxy(result);
             statementProxy.setConnection(proxy);
@@ -237,10 +254,16 @@ public class StatementCache extends StatementDecoratorInterceptor {
         return cache;
     }
 
-    protected class CachedStatement extends StatementDecoratorInterceptor.StatementProxy<Statement> {
-        boolean cached = false;
+    @Override
+    public int getCacheSizePerConnection() {
+        ConcurrentHashMap<CacheKey,CachedStatement> cache = getCache();
+        if (cache == null) return 0;
+        return cache.size();
+    }
+
+    protected class CachedStatement extends StatementDecoratorInterceptor.StatementProxy<PreparedStatement> {
         CacheKey key;
-        public CachedStatement(Statement parent, String sql) {
+        public CachedStatement(PreparedStatement parent, String sql) {
             super(parent, sql);
         }
 
@@ -258,16 +281,18 @@ public class StatementCache extends StatementDecoratorInterceptor {
                     if (result != null && !result.isClosed()) {
                         result.close();
                     }
+                    // clear parameter
+                    getDelegate().clearParameters();
+
                     //create a new facade
                     Object actualProxy = getConstructor().newInstance(new Object[] { proxy });
                     proxy.setActualProxy(actualProxy);
                     proxy.setConnection(getConnection());
                     proxy.setConstructor(getConstructor());
                     if (cacheStatement(proxy)) {
-                        proxy.cached = true;
                         shouldClose = false;
                     }
-                } catch (Exception x) {
+                } catch (RuntimeException | ReflectiveOperationException | SQLException x) {
                     removeStatement(proxy);
                 }
             }

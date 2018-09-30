@@ -52,19 +52,16 @@ echo Service will try to guess them from the registry.
 goto okJavaHome
 :gotJreHome
 if not exist "%JRE_HOME%\bin\java.exe" goto noJavaHome
-if not exist "%JRE_HOME%\bin\javaw.exe" goto noJavaHome
 goto okJavaHome
 :gotJdkHome
 if not exist "%JAVA_HOME%\bin\javac.exe" goto noJavaHome
 rem Java 9 has a different directory structure
 if exist "%JAVA_HOME%\jre\bin\java.exe" goto preJava9Layout
 if not exist "%JAVA_HOME%\bin\java.exe" goto noJavaHome
-if not exist "%JAVA_HOME%\bin\javaw.exe" goto noJavaHome
 if not "%JRE_HOME%" == "" goto okJavaHome
 set "JRE_HOME=%JAVA_HOME%"
 goto okJavaHome
 :preJava9Layout
-if not exist "%JAVA_HOME%\jre\bin\javaw.exe" goto noJavaHome
 if not "%JRE_HOME%" == "" goto okJavaHome
 set "JRE_HOME=%JAVA_HOME%\jre"
 goto okJavaHome
@@ -167,7 +164,7 @@ if "%JvmMs%" == "" set JvmMs=128
 if "%JvmMx%" == "" set JvmMx=256
 
 "%EXECUTABLE%" //IS//%SERVICE_NAME% ^
-    --Description "Apache Tomcat @VERSION@ Server - http://tomcat.apache.org/" ^
+    --Description "Apache Tomcat @VERSION@ Server - https://tomcat.apache.org/" ^
     --DisplayName "%DISPLAYNAME%" ^
     --Install "%EXECUTABLE%" ^
     --LogPath "%CATALINA_BASE%\logs" ^
@@ -184,7 +181,7 @@ if "%JvmMx%" == "" set JvmMx=256
     --StartParams start ^
     --StopParams stop ^
     --JvmOptions "-Dcatalina.home=%CATALINA_HOME%;-Dcatalina.base=%CATALINA_BASE%;-D%ENDORSED_PROP%=%CATALINA_HOME%\endorsed;-Djava.io.tmpdir=%CATALINA_BASE%\temp;-Djava.util.logging.manager=org.apache.juli.ClassLoaderLogManager;-Djava.util.logging.config.file=%CATALINA_BASE%\conf\logging.properties;%JvmArgs%" ^
-    --JvmOptions9 "--add-opens=java.base/java.lang=ALL-UNNAMED#--add-opens=java.rmi/sun.rmi.transport=ALL-UNNAMED" ^
+    --JvmOptions9 "--add-opens=java.base/java.lang=ALL-UNNAMED#--add-opens=java.base/java.io=ALL-UNNAMED#--add-opens=java.rmi/sun.rmi.transport=ALL-UNNAMED" ^
     --Startup "%SERVICE_STARTUP_MODE%" ^
     --JvmMs "%JvmMs%" ^
     --JvmMx "%JvmMx%"

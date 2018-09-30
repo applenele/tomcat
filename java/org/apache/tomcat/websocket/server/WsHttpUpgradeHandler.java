@@ -46,7 +46,7 @@ import org.apache.tomcat.websocket.WsSession;
  */
 public class WsHttpUpgradeHandler implements InternalHttpUpgradeHandler {
 
-    private static final Log log = LogFactory.getLog(WsHttpUpgradeHandler.class);
+    private final Log log = LogFactory.getLog(WsHttpUpgradeHandler.class); // must not be static
     private static final StringManager sm = StringManager.getManager(WsHttpUpgradeHandler.class);
 
     private final ClassLoader applicationClassLoader;
@@ -153,9 +153,8 @@ public class WsHttpUpgradeHandler implements InternalHttpUpgradeHandler {
                     CloseReason cr = new CloseReason(
                             CloseCodes.CLOSED_ABNORMALLY, ioe.getMessage());
                     close(cr);
-                    return SocketState.CLOSED;
                 }
-                break;
+                return SocketState.CLOSED;
             case OPEN_WRITE:
                 wsRemoteEndpointServer.onWritePossible(false);
                 break;

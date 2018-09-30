@@ -229,7 +229,7 @@ public class MultipartStream {
     /**
      * The table for Knuth-Morris-Pratt search algorithm.
      */
-    private int[] boundaryTable;
+    private final int[] boundaryTable;
 
     /**
      * The length of the buffer used for processing the request.
@@ -605,7 +605,7 @@ public class MultipartStream {
      * @throws IOException if an i/o error occurs.
      */
     public boolean skipPreamble() throws IOException {
-        // First delimiter may be not preceeded with a CRLF.
+        // First delimiter may be not preceded with a CRLF.
         System.arraycopy(boundary, 2, boundary, 0, boundary.length - 2);
         boundaryLength = boundary.length - 2;
         computeBoundaryTable();

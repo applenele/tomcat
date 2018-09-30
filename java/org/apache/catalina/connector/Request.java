@@ -175,7 +175,10 @@ public class Request implements HttpServletRequest {
 
     // ----------------------------------------------------- Variables
 
-
+    /**
+     * @deprecated Unused. This will be removed in Tomcat 10.
+     */
+    @Deprecated
     protected static final TimeZone GMT_ZONE = TimeZone.getTimeZone("GMT");
 
 
@@ -196,9 +199,13 @@ public class Request implements HttpServletRequest {
      *
      * Notice that because SimpleDateFormat is not thread-safe, we can't
      * declare formats[] as a static variable.
+     *
+     * @deprecated Unused. This will be removed in Tomcat 10
      */
+    @Deprecated
     protected final SimpleDateFormat formats[];
 
+    @Deprecated
     private static final SimpleDateFormat formatsTemplate[] = {
         new SimpleDateFormat(FastHttpDateFormat.RFC1123_DATE, Locale.US),
         new SimpleDateFormat("EEEEEE, dd-MMM-yy HH:mm:ss zzz", Locale.US),
@@ -1353,6 +1360,25 @@ public class Request implements HttpServletRequest {
             return context.getServletContext().getRequestDispatcher(path);
         }
 
+        /*
+         * Relative to what, exactly?
+         *
+         * From the Servlet 4.0 Javadoc:
+         * - The pathname specified may be relative, although it cannot extend
+         *   outside the current servlet context.
+         * - If it is relative, it must be relative against the current servlet
+         *
+         * From Section 9.1 of the spec:
+         * - The servlet container uses information in the request object to
+         *   transform the given relative path against the current servlet to a
+         *   complete path.
+         *
+         * It is undefined whether the requestURI is used or whether servletPath
+         * and pathInfo are used. Given that the RequestURI includes the
+         * contextPath (and extracting that is messy) , using the servletPath and
+         * pathInfo looks to be the more reasonable choice.
+         */
+
         // Convert a request-relative path to a context-relative one
         String servletPath = (String) getAttribute(
                 RequestDispatcher.INCLUDE_SERVLET_PATH);
@@ -1522,6 +1548,9 @@ public class Request implements HttpServletRequest {
     private void notifyAttributeAssigned(String name, Object value,
             Object oldValue) {
         Context context = getContext();
+        if (context == null) {
+            return;
+        }
         Object listeners[] = context.getApplicationEventListeners();
         if ((listeners == null) || (listeners.length == 0)) {
             return;
@@ -1910,7 +1939,7 @@ public class Request implements HttpServletRequest {
      * @param principal The user Principal
      */
     public void setUserPrincipal(final Principal principal) {
-        if (Globals.IS_SECURITY_ENABLED) {
+        if (Globals.IS_SECURITY_ENABLED && principal != null) {
             if (subject == null) {
                 final HttpSession session = getSession(false);
                 if (session == null) {
@@ -2023,15 +2052,28 @@ public class Request implements HttpServletRequest {
      */
     @Override
     public String getContextPath() {
-        String canonicalContextPath = getServletContext().getContextPath();
-        String uri = getRequestURI();
-        char[] uriChars = uri.toCharArray();
         int lastSlash = mappingData.contextSlashCount;
         // Special case handling for the root context
         if (lastSlash == 0) {
             return "";
         }
+
+        String canonicalContextPath = getServletContext().getContextPath();
+
+        String uri = getRequestURI();
         int pos = 0;
+        if (!getContext().getAllowMultipleLeadingForwardSlashInPath()) {
+            // Ensure that the returned value only starts with a single '/'.
+            // This prevents the value being misinterpreted as a protocol-
+            // relative URI if used with sendRedirect().
+            do {
+                pos++;
+            } while (pos < uri.length() && uri.charAt(pos) == '/');
+            pos--;
+            uri = uri.substring(pos);
+        }
+
+        char[] uriChars = uri.toCharArray();
         // Need at least the number of slashes in the context path
         while (lastSlash > 0) {
             pos = nextSlash(uriChars, pos + 1);
@@ -2170,7 +2212,7 @@ public class Request implements HttpServletRequest {
         }
 
         // Attempt to convert the date header in a variety of formats
-        long result = FastHttpDateFormat.parseDate(value, formats);
+        long result = FastHttpDateFormat.parseDate(value);
         if (result != (-1L)) {
             return result;
         }
@@ -2691,12 +2733,7 @@ public class Request implements HttpServletRequest {
                     sm.getString("coyoteRequest.alreadyAuthenticated"));
         }
 
-        Context context = getContext();
-        if (context.getAuthenticator() == null) {
-            throw new ServletException("no authenticator");
-        }
-
-        context.getAuthenticator().login(username, password, this);
+        getContext().getAuthenticator().login(username, password, this);
     }
 
     /**
@@ -3133,11 +3170,6 @@ public class Request implements HttpServletRequest {
                 return;
             }
 
-            if( !getConnector().isParseBodyMethod(getMethod()) ) {
-                success = true;
-                return;
-            }
-
             String contentType = getContentType();
             if (contentType == null) {
                 contentType = "";
@@ -3151,6 +3183,11 @@ public class Request implements HttpServletRequest {
 
             if ("multipart/form-data".equals(contentType)) {
                 parseParts(false);
+                success = true;
+                return;
+            }
+
+            if( !getConnector().isParseBodyMethod(getMethod()) ) {
                 success = true;
                 return;
             }

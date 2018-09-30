@@ -27,6 +27,9 @@ import javax.servlet.RequestDispatcher;
 
 import org.apache.tomcat.util.ExceptionUtils;
 import org.apache.tomcat.util.buf.ByteChunk;
+import org.apache.tomcat.util.buf.MessageBytes;
+import org.apache.tomcat.util.http.parser.Host;
+import org.apache.tomcat.util.log.UserDataHelper;
 import org.apache.tomcat.util.net.AbstractEndpoint.Handler.SocketState;
 import org.apache.tomcat.util.net.DispatchType;
 import org.apache.tomcat.util.net.SSLSupport;
@@ -42,9 +45,22 @@ public abstract class AbstractProcessor extends AbstractProcessorLight implement
 
     private static final StringManager sm = StringManager.getManager(AbstractProcessor.class);
 
+    // Used to avoid useless B2C conversion on the host name.
+    private char[] hostNameC = new char[0];
+
     protected final Adapter adapter;
     protected final AsyncStateMachine asyncStateMachine;
     private volatile long asyncTimeout = -1;
+    /*
+     * Tracks the current async generation when a timeout is dispatched. In the
+     * time it takes for a container thread to be allocated and the timeout
+     * processing to start, it is possible that the application completes this
+     * generation of async processing and starts a new one. If the timeout is
+     * then processed against the new generation, response mix-up can occur.
+     * This field is used to ensure that any timeout event processed is for the
+     * current async generation. This prevents the response mix-up.
+     */
+    private volatile long asyncTimeoutGeneration = 0;
     protected final Request request;
     protected final Response response;
     protected volatile SocketWrapperBase<?> socketWrapper = null;
@@ -56,6 +72,7 @@ public abstract class AbstractProcessor extends AbstractProcessorLight implement
      */
     private ErrorState errorState = ErrorState.NONE;
 
+    protected final UserDataHelper userDataHelper;
 
     public AbstractProcessor(Adapter adapter) {
         this(adapter, new Request(), new Response());
@@ -70,6 +87,7 @@ public abstract class AbstractProcessor extends AbstractProcessorLight implement
         response.setHook(this);
         request.setResponse(response);
         request.setHook(this);
+        userDataHelper = new UserDataHelper(getLog());
     }
 
     /**
@@ -79,6 +97,7 @@ public abstract class AbstractProcessor extends AbstractProcessorLight implement
      * @param t The error which occurred
      */
     protected void setErrorState(ErrorState errorState, Throwable t) {
+        response.setError();
         boolean blockIo = this.errorState.isIoAllowed() && !errorState.isIoAllowed();
         this.errorState = this.errorState.getMostSevere(errorState);
         // Don't change the status code for IOException since that is almost
@@ -241,6 +260,83 @@ public abstract class AbstractProcessor extends AbstractProcessorLight implement
             request.updateCounters();
             return dispatchEndRequest();
         }
+    }
+
+
+    protected void parseHost(MessageBytes valueMB) {
+        if (valueMB == null || valueMB.isNull()) {
+            populateHost();
+            return;
+        }
+
+        ByteChunk valueBC = valueMB.getByteChunk();
+        byte[] valueB = valueBC.getBytes();
+        int valueL = valueBC.getLength();
+        int valueS = valueBC.getStart();
+        if (hostNameC.length < valueL) {
+            hostNameC = new char[valueL];
+        }
+
+        try {
+            // Validates the host name
+            int colonPos = Host.parse(valueMB);
+
+            // Extract the port information first, if any
+            if (colonPos != -1) {
+                int port = 0;
+                for (int i = colonPos + 1; i < valueL; i++) {
+                    char c = (char) valueB[i + valueS];
+                    if (c < '0' || c > '9') {
+                        response.setStatus(400);
+                        setErrorState(ErrorState.CLOSE_CLEAN, null);
+                        return;
+                    }
+                    port = port * 10 + c - '0';
+                }
+                request.setServerPort(port);
+
+                // Only need to copy the host name up to the :
+                valueL = colonPos;
+            }
+
+            // Extract the host name
+            for (int i = 0; i < valueL; i++) {
+                hostNameC[i] = (char) valueB[i + valueS];
+            }
+            request.serverName().setChars(hostNameC, 0, valueL);
+
+        } catch (IllegalArgumentException e) {
+            // IllegalArgumentException indicates that the host name is invalid
+            UserDataHelper.Mode logMode = userDataHelper.getNextMode();
+            if (logMode != null) {
+                String message = sm.getString("abstractProcessor.hostInvalid", valueMB.toString());
+                switch (logMode) {
+                    case INFO_THEN_DEBUG:
+                        message += sm.getString("abstractProcessor.fallToDebug");
+                        //$FALL-THROUGH$
+                    case INFO:
+                        getLog().info(message, e);
+                        break;
+                    case DEBUG:
+                        getLog().debug(message, e);
+                }
+            }
+
+            response.setStatus(400);
+            setErrorState(ErrorState.CLOSE_CLEAN, e);
+        }
+    }
+
+
+    /**
+     * Called when a host name is not present in the request (e.g. HTTP/1.0).
+     * It populates the server name and port with appropriate information. The
+     * source is expected to vary by protocol.
+     * <p>
+     * The default implementation is a NO-OP.
+     */
+    protected void populateHost() {
+        // NO-OP
     }
 
 
@@ -534,7 +630,14 @@ public abstract class AbstractProcessor extends AbstractProcessorLight implement
     private void doTimeoutAsync() {
         // Avoid multiple timeouts
         setAsyncTimeout(-1);
+        asyncTimeoutGeneration = asyncStateMachine.getCurrentGeneration();
         processSocketEvent(SocketEvent.TIMEOUT, true);
+    }
+
+
+    @Override
+    public boolean checkAsyncTimeoutGeneration() {
+        return asyncTimeoutGeneration == asyncStateMachine.getCurrentGeneration();
     }
 
 

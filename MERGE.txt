@@ -49,7 +49,7 @@ GIT
 Updates from Git are applied manually via patch files. Patch files are generated
 using:
 git diff <last SHA1>:<sub-tree> HEAD:<sub-tree> > temp.patch
-The more recently merged SHA1 for the component below should be updated after
+The most recently merged SHA1 for the component below should be updated after
 the patch file has been applied and committed
 
 FileUpload
@@ -57,7 +57,7 @@ FileUpload
 Sub-tree:
 src/main/java/org/apache/commons/fileupload
 The SHA1 ID for the most recent commit to be merged to Tomcat is:
-6c00d575a9521c386743891fd34bc5181174cc01
+b1498c9877d751f8bc4635a6f252ebdfcba28518
 
 Note: Tomcat's copy of fileupload also includes classes copied manually (rather
       than svn copied) from Commons IO.
@@ -66,13 +66,13 @@ DBCP
 ----
 DBCP2
 Sub-tree
-/commons/proper/dbcp/trunk/src/main/java/org/apache/commons/dbcp2
-/commons/proper/dbcp/trunk/src/main/resources/org/apache/commons/dbcp2
+src/main/java/org/apache/commons/dbcp2
+src/main/resources/org/apache/commons/dbcp2
 The SHA1 ID for the most recent commit to be merged to Tomcat is:
-8a71764a895b234bd1fc76553835ef4c974f22e1
+171528a88cca65f5b192be643c2425458d1edfbb
 
 Pool2
 Sub-tree
 src/main/java/org/apache/commons/pool2
 The SHA1 ID for the most recent commit to be merged to Tomcat is:
-191a391166a8565718ef685531afa3fa44afd69c
+d4e0e88227ad91d8c8ef36ba01d656f71c770f83

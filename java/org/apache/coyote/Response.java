@@ -24,6 +24,7 @@ import java.nio.charset.Charset;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 
 import javax.servlet.WriteListener;
@@ -97,7 +98,7 @@ public final class Response {
     /**
      * Committed flag.
      */
-    volatile boolean commited = false;
+    volatile boolean committed = false;
 
 
     /**
@@ -128,7 +129,39 @@ public final class Response {
      */
     Exception errorException = null;
 
+    /**
+     * With the introduction of async processing and the possibility of
+     * non-container threads calling sendError() tracking the current error
+     * state and ensuring that the correct error page is called becomes more
+     * complicated. This state attribute helps by tracking the current error
+     * state and informing callers that attempt to change state if the change
+     * was successful or if another thread got there first.
+     *
+     * <pre>
+     * The state machine is very simple:
+     *
+     * 0 - NONE
+     * 1 - NOT_REPORTED
+     * 2 - REPORTED
+     *
+     *
+     *   -->---->-- >NONE
+     *   |   |        |
+     *   |   |        | setError()
+     *   ^   ^        |
+     *   |   |       \|/
+     *   |   |-<-NOT_REPORTED
+     *   |            |
+     *   ^            | report()
+     *   |            |
+     *   |           \|/
+     *   |----<----REPORTED
+     * </pre>
+     */
+    private final AtomicInteger errorState = new AtomicInteger(0);
+
     Request req;
+
 
     // ------------------------------------------------------------- Properties
 
@@ -219,15 +252,15 @@ public final class Response {
 
 
     public boolean isCommitted() {
-        return commited;
+        return committed;
     }
 
 
     public void setCommitted(boolean v) {
-        if (v && !this.commited) {
+        if (v && !this.committed) {
             this.commitTime = System.currentTimeMillis();
         }
-        this.commited = v;
+        this.committed = v;
     }
 
     /**
@@ -240,7 +273,6 @@ public final class Response {
     }
 
     // -----------------Error State --------------------
-
 
     /**
      * Set the error Exception that occurred during request processing.
@@ -267,12 +299,41 @@ public final class Response {
     }
 
 
-    // -------------------- Methods --------------------
+    /**
+     * Set the error flag.
+     *
+     * @return <code>false</code> if the error flag was already set
+     */
+    public boolean setError() {
+        return errorState.compareAndSet(0, 1);
+    }
 
+
+    /**
+     * Error flag accessor.
+     *
+     * @return <code>true</code> if the response has encountered an error
+     */
+    public boolean isError() {
+        return errorState.get() > 0;
+    }
+
+
+    public boolean isErrorReportRequired() {
+        return errorState.get() == 1;
+    }
+
+
+    public boolean setErrorReported() {
+        return errorState.compareAndSet(1, 2);
+    }
+
+
+    // -------------------- Methods --------------------
 
     public void reset() throws IllegalStateException {
 
-        if (commited) {
+        if (committed) {
             throw new IllegalStateException();
         }
 
@@ -551,9 +612,10 @@ public final class Response {
         contentLength = -1;
         status = 200;
         message = null;
-        commited = false;
+        committed = false;
         commitTime = -1;
         errorException = null;
+        errorState.set(0);
         headers.clear();
         trailerFieldsSupplier = null;
         // Servlet 3.1 non-blocking write listener

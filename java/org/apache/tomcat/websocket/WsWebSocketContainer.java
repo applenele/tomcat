@@ -52,6 +52,7 @@ import java.util.concurrent.TimeoutException;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLEngine;
 import javax.net.ssl.SSLException;
+import javax.net.ssl.SSLParameters;
 import javax.net.ssl.TrustManagerFactory;
 import javax.websocket.ClientEndpoint;
 import javax.websocket.ClientEndpointConfig;
@@ -87,7 +88,7 @@ public class WsWebSocketContainer implements WebSocketContainer, BackgroundProce
     private volatile AsynchronousChannelGroup asynchronousChannelGroup = null;
     private final Object asynchronousChannelGroupLock = new Object();
 
-    private final Log log = LogFactory.getLog(WsWebSocketContainer.class);
+    private final Log log = LogFactory.getLog(WsWebSocketContainer.class); // must not be static
     private final Map<Endpoint, Set<WsSession>> endpointSessionMap =
             new HashMap<>();
     private final Map<WsSession,WsSession> sessions = new ConcurrentHashMap<>();
@@ -328,7 +329,7 @@ public class WsWebSocketContainer implements WebSocketContainer, BackgroundProce
             // Regardless of whether a non-secure wrapper was created for a
             // proxy CONNECT, need to use TLS from this point on so wrap the
             // original AsynchronousSocketChannel
-            SSLEngine sslEngine = createSSLEngine(userProperties);
+            SSLEngine sslEngine = createSSLEngine(userProperties, host, port);
             channel = new AsyncChannelWrapperSecure(socketChannel, sslEngine);
         } else if (channel == null) {
             // Only need to wrap as this point if it wasn't wrapped to process a
@@ -732,7 +733,7 @@ public class WsWebSocketContainer implements WebSocketContainer, BackgroundProce
 
         // Headers
         for (Entry<String, List<String>> entry : reqHeaders.entrySet()) {
-            addHeader(result, entry.getKey(), entry.getValue());
+            result = addHeader(result, entry.getKey(), entry.getValue());
         }
 
         // Terminating CRLF
@@ -744,15 +745,34 @@ public class WsWebSocketContainer implements WebSocketContainer, BackgroundProce
     }
 
 
-    private static void addHeader(ByteBuffer result, String key, List<String> values) {
+    private static ByteBuffer addHeader(ByteBuffer result, String key, List<String> values) {
         if (values.isEmpty()) {
-            return;
+            return result;
         }
 
-        result.put(key.getBytes(StandardCharsets.ISO_8859_1));
-        result.put(": ".getBytes(StandardCharsets.ISO_8859_1));
-        result.put(StringUtils.join(values).getBytes(StandardCharsets.ISO_8859_1));
-        result.put(CRLF);
+        result = putWithExpand(result, key.getBytes(StandardCharsets.ISO_8859_1));
+        result = putWithExpand(result, ": ".getBytes(StandardCharsets.ISO_8859_1));
+        result = putWithExpand(result, StringUtils.join(values).getBytes(StandardCharsets.ISO_8859_1));
+        result = putWithExpand(result, CRLF);
+
+        return result;
+    }
+
+
+    private static ByteBuffer putWithExpand(ByteBuffer input, byte[] bytes) {
+        if (bytes.length > input.remaining()) {
+            int newSize;
+            if (bytes.length > input.capacity()) {
+                newSize = 2 * bytes.length;
+            } else {
+                newSize = input.capacity() * 2;
+            }
+            ByteBuffer expanded = ByteBuffer.allocate(newSize);
+            input.flip();
+            expanded.put(input);
+            input = expanded;
+        }
+        return input.put(bytes);
     }
 
 
@@ -866,7 +886,7 @@ public class WsWebSocketContainer implements WebSocketContainer, BackgroundProce
     }
 
 
-    private SSLEngine createSSLEngine(Map<String,Object> userProperties)
+    private SSLEngine createSSLEngine(Map<String,Object> userProperties, String host, int port)
             throws DeploymentException {
 
         try {
@@ -904,7 +924,7 @@ public class WsWebSocketContainer implements WebSocketContainer, BackgroundProce
                 }
             }
 
-            SSLEngine engine = sslContext.createSSLEngine();
+            SSLEngine engine = sslContext.createSSLEngine(host, port);
 
             String sslProtocolsValue =
                     (String) userProperties.get(Constants.SSL_PROTOCOLS_PROPERTY);
@@ -913,6 +933,14 @@ public class WsWebSocketContainer implements WebSocketContainer, BackgroundProce
             }
 
             engine.setUseClientMode(true);
+
+            // Enable host verification
+            // Start with current settings (returns a copy)
+            SSLParameters sslParams = engine.getSSLParameters();
+            // Use HTTPS since WebSocket starts over HTTP(S)
+            sslParams.setEndpointIdentificationAlgorithm("HTTPS");
+            // Write the parameters back
+            engine.setSSLParameters(sslParams);
 
             return engine;
         } catch (Exception e) {

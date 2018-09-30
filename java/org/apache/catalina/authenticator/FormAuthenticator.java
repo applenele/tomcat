@@ -52,7 +52,7 @@ import org.apache.tomcat.util.http.MimeHeaders;
 public class FormAuthenticator
     extends AuthenticatorBase {
 
-    private static final Log log = LogFactory.getLog(FormAuthenticator.class);
+    private final Log log = LogFactory.getLog(FormAuthenticator.class); // must not be static
 
 
     // ----------------------------------------------------- Instance Variables
@@ -611,6 +611,18 @@ public class FormAuthenticator
         }
 
         request.getCoyoteRequest().method().setString(method);
+        // The method, URI, queryString and protocol are normally stored as
+        // bytes in the HttpInputBuffer and converted lazily to String. At this
+        // point, the method has already been set as String in the line above
+        // but the URI, queryString and protocol are still in byte form in the
+        // HttpInputBuffer. Processing the saved request body will overwrite
+        // these bytes. Configuring the HttpInputBuffer to retain these bytes as
+        // it would in a normal request would require some invasive API changes.
+        // Therefore force the conversion to String now so the correct values
+        // are presented if the application requests them.
+        request.getRequestURI();
+        request.getQueryString();
+        request.getProtocol();
 
         return true;
     }
@@ -652,21 +664,24 @@ public class FormAuthenticator
         // May need to acknowledge a 100-continue expectation
         request.getResponse().sendAcknowledgement();
 
-        ByteChunk body = new ByteChunk();
-        body.setLimit(request.getConnector().getMaxSavePostSize());
+        int maxSavePostSize = request.getConnector().getMaxSavePostSize();
+        if (maxSavePostSize != 0) {
+            ByteChunk body = new ByteChunk();
+            body.setLimit(maxSavePostSize);
 
-        byte[] buffer = new byte[4096];
-        int bytesRead;
-        InputStream is = request.getInputStream();
+            byte[] buffer = new byte[4096];
+            int bytesRead;
+            InputStream is = request.getInputStream();
 
-        while ( (bytesRead = is.read(buffer) ) >= 0) {
-            body.append(buffer, 0, bytesRead);
-        }
+            while ( (bytesRead = is.read(buffer) ) >= 0) {
+                body.append(buffer, 0, bytesRead);
+            }
 
-        // Only save the request body if there is something to save
-        if (body.getLength() > 0) {
-            saved.setContentType(request.getContentType());
-            saved.setBody(body);
+            // Only save the request body if there is something to save
+            if (body.getLength() > 0) {
+                saved.setContentType(request.getContentType());
+                saved.setBody(body);
+            }
         }
 
         saved.setMethod(request.getMethod());
@@ -699,6 +714,4 @@ public class FormAuthenticator
         }
         return sb.toString();
     }
-
-
 }

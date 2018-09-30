@@ -19,9 +19,6 @@ package org.apache.catalina.authenticator;
 import java.io.IOException;
 import java.security.Principal;
 import java.security.cert.X509Certificate;
-import java.text.SimpleDateFormat;
-import java.util.Date;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -52,7 +49,6 @@ import org.apache.catalina.Realm;
 import org.apache.catalina.Session;
 import org.apache.catalina.TomcatPrincipal;
 import org.apache.catalina.Valve;
-import org.apache.catalina.Wrapper;
 import org.apache.catalina.authenticator.jaspic.CallbackHandlerImpl;
 import org.apache.catalina.authenticator.jaspic.MessageInfoImpl;
 import org.apache.catalina.connector.Request;
@@ -91,13 +87,12 @@ import org.apache.tomcat.util.res.StringManager;
 public abstract class AuthenticatorBase extends ValveBase
         implements Authenticator, RegistrationListener {
 
-    private static final Log log = LogFactory.getLog(AuthenticatorBase.class);
+    private final Log log = LogFactory.getLog(AuthenticatorBase.class); // must not be static
 
     /**
      * "Expires" header always set to Date(1), so generate once only
      */
-    private static final String DATE_ONE =
-            (new SimpleDateFormat(FastHttpDateFormat.RFC1123_DATE, Locale.US)).format(new Date(1));
+    private static final String DATE_ONE = FastHttpDateFormat.formatDate(1);
 
     /**
      * The string manager for this package.
@@ -479,13 +474,6 @@ public abstract class AuthenticatorBase extends ValveBase
 
         boolean authRequired = isContinuationRequired(request);
 
-        // The Servlet may specify security constraints through annotations.
-        // Ensure that they have been processed before constraints are checked
-        Wrapper wrapper = request.getWrapper();
-        if (wrapper != null) {
-            wrapper.servletSecurityAnnotationScan();
-        }
-
         Realm realm = this.context.getRealm();
         // Is this request URI subject to a security constraint?
         SecurityConstraint[] constraints = realm.findSecurityConstraints(request, this.context);
@@ -822,7 +810,6 @@ public abstract class AuthenticatorBase extends ValveBase
                     !principal.getUserPrincipal().equals(request.getUserPrincipal())) {
                 // Skip registration if authentication credentials were
                 // cached and the Principal did not change.
-                request.setNote(Constants.REQ_JASPIC_SUBJECT_NOTE, client);
                 @SuppressWarnings("rawtypes")// JASPIC API uses raw types
                 Map map = state.messageInfo.getMap();
                 if (map != null && map.containsKey("javax.servlet.http.registerSession")) {
@@ -831,6 +818,7 @@ public abstract class AuthenticatorBase extends ValveBase
                     register(request, response, principal, "JASPIC", null, null);
                 }
             }
+            request.setNote(Constants.REQ_JASPIC_SUBJECT_NOTE, client);
             return true;
         }
         return false;
@@ -1148,19 +1136,17 @@ public abstract class AuthenticatorBase extends ValveBase
         if (provider != null) {
             MessageInfo messageInfo = new MessageInfoImpl(request, request.getResponse(), true);
             Subject client = (Subject) request.getNote(Constants.REQ_JASPIC_SUBJECT_NOTE);
-            if (client == null) {
-                return;
-            }
-
-            ServerAuthContext serverAuthContext;
-            try {
-                ServerAuthConfig serverAuthConfig = provider.getServerAuthConfig("HttpServlet",
-                        jaspicAppContextID, CallbackHandlerImpl.getInstance());
-                String authContextID = serverAuthConfig.getAuthContextID(messageInfo);
-                serverAuthContext = serverAuthConfig.getAuthContext(authContextID, null, null);
-                serverAuthContext.cleanSubject(messageInfo, client);
-            } catch (AuthException e) {
-                log.debug(sm.getString("authenticator.jaspicCleanSubjectFail"), e);
+            if (client != null) {
+                ServerAuthContext serverAuthContext;
+                try {
+                    ServerAuthConfig serverAuthConfig = provider.getServerAuthConfig("HttpServlet",
+                            jaspicAppContextID, CallbackHandlerImpl.getInstance());
+                    String authContextID = serverAuthConfig.getAuthContextID(messageInfo);
+                    serverAuthContext = serverAuthConfig.getAuthContext(authContextID, null, null);
+                    serverAuthContext.cleanSubject(messageInfo, client);
+                } catch (AuthException e) {
+                    log.debug(sm.getString("authenticator.jaspicCleanSubjectFail"), e);
+                }
             }
         }
 

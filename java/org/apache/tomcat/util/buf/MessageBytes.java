@@ -87,7 +87,7 @@ public final class MessageBytes implements Cloneable, Serializable {
     }
 
     public boolean isNull() {
-        return byteC.isNull() && charC.isNull() && ! hasStrValue;
+        return byteC.isNull() && charC.isNull() && !hasStrValue;
     }
 
     /**
@@ -161,18 +161,18 @@ public final class MessageBytes implements Cloneable, Serializable {
      */
     @Override
     public String toString() {
-        if( hasStrValue ) {
+        if (hasStrValue) {
             return strValue;
         }
 
         switch (type) {
         case T_CHARS:
-            strValue=charC.toString();
-            hasStrValue=true;
+            strValue = charC.toString();
+            hasStrValue = true;
             return strValue;
         case T_BYTES:
-            strValue=byteC.toString();
-            hasStrValue=true;
+            strValue = byteC.toString();
+            hasStrValue = true;
             return strValue;
         }
         return null;
@@ -230,34 +230,42 @@ public final class MessageBytes implements Cloneable, Serializable {
         byteC.setCharset(charset);
     }
 
+
     /**
      * Do a char-&gt;byte conversion.
      */
     public void toBytes() {
+        if (isNull()) {
+            return;
+        }
         if (!byteC.isNull()) {
-            type=T_BYTES;
+            type = T_BYTES;
             return;
         }
         toString();
-        type=T_BYTES;
+        type = T_BYTES;
         Charset charset = byteC.getCharset();
         ByteBuffer result = charset.encode(strValue);
         byteC.setBytes(result.array(), result.arrayOffset(), result.limit());
     }
+
 
     /**
      * Convert to char[] and fill the CharChunk.
      * XXX Not optimized - it converts to String first.
      */
     public void toChars() {
-        if( ! charC.isNull() ) {
-            type=T_CHARS;
+        if (isNull()) {
+            return;
+        }
+        if (!charC.isNull()) {
+            type = T_CHARS;
             return;
         }
         // inefficient
         toString();
-        type=T_CHARS;
-        char cc[]=strValue.toCharArray();
+        type = T_CHARS;
+        char cc[] = strValue.toCharArray();
         charC.setChars(cc, 0, cc.length);
     }
 

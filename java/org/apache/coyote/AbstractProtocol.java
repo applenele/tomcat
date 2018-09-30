@@ -631,6 +631,12 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler,
     }
 
 
+    @Override
+    public void closeServerSocketGraceful() {
+        endpoint.closeServerSocketGraceful();
+    }
+
+
     // ------------------------------------------- Connection handler base class
 
     protected static class ConnectionHandler<S> implements AbstractEndpoint.Handler<S> {
@@ -681,6 +687,16 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler,
             if (getLog().isDebugEnabled()) {
                 getLog().debug(sm.getString("abstractConnectionHandler.connectionsGet",
                         processor, socket));
+            }
+
+            // Async timeouts are calculated on a dedicated thread and then
+            // dispatched. Because of delays in the dispatch process, the
+            // timeout may no longer be required. Check here and avoid
+            // unnecessary processing.
+            if (SocketEvent.TIMEOUT == status && (processor == null ||
+                    !processor.isAsync() || !processor.checkAsyncTimeoutGeneration())) {
+                // This is effectively a NO-OP
+                return SocketState.OPEN;
             }
 
             if (processor != null) {

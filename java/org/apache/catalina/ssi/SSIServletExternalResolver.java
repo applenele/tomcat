@@ -427,13 +427,7 @@ public class SSIServletExternalResolver implements SSIExternalResolver {
         // ie:
         // '/file1.shtml' vs '/appName1/file1.shtml'
         if (!isRootContext(normContext)) {
-            String noContext = getPathWithoutContext(
-                    normContext.getContextPath(), normalized);
-            if (noContext == null) {
-                throw new IOException(
-                        "Couldn't remove context from path: "
-                                + normalized);
-            }
+            String noContext = getPathWithoutContext(normContext.getContextPath(), normalized);
             return new ServletContextAndPath(normContext, noContext);
         }
 
@@ -528,10 +522,8 @@ public class SSIServletExternalResolver implements SSIExternalResolver {
                 throw new IOException(
                         "Couldn't get request dispatcher for path: " + path);
             }
-            ByteArrayServletOutputStream basos =
-                new ByteArrayServletOutputStream();
-            ResponseIncludeWrapper responseIncludeWrapper =
-                new ResponseIncludeWrapper(context, req, res, basos);
+            ByteArrayServletOutputStream basos = new ByteArrayServletOutputStream();
+            ResponseIncludeWrapper responseIncludeWrapper = new ResponseIncludeWrapper(res, basos);
             rd.include(req, responseIncludeWrapper);
             //We can't assume the included servlet flushed its output
             responseIncludeWrapper.flushOutputStreamOrWriter();

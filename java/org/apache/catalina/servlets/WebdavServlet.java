@@ -43,11 +43,11 @@ import javax.xml.parsers.ParserConfigurationException;
 
 import org.apache.catalina.WebResource;
 import org.apache.catalina.connector.RequestFacade;
-import org.apache.catalina.util.ConcurrentDateFormat;
 import org.apache.catalina.util.DOMWriter;
 import org.apache.catalina.util.URLEncoder;
 import org.apache.catalina.util.XMLWriter;
 import org.apache.tomcat.util.buf.UDecoder;
+import org.apache.tomcat.util.http.ConcurrentDateFormat;
 import org.apache.tomcat.util.http.FastHttpDateFormat;
 import org.apache.tomcat.util.http.RequestUtil;
 import org.apache.tomcat.util.security.ConcurrentMessageDigest;
@@ -1957,7 +1957,6 @@ public class WebdavServlet extends DefaultServlet {
      * Propfind helper method.
      *
      * @param req The servlet request
-     * @param resources Resources object associated with this context
      * @param generatedXML XML response to the Propfind request
      * @param path Path of the current resource
      * @param type Propfind type
@@ -2000,7 +1999,7 @@ public class WebdavServlet extends DefaultServlet {
     /**
      * Propfind helper method. Displays the properties of a lock-null resource.
      *
-     * @param resources Resources object associated with this context
+     * @param req The servlet request
      * @param generatedXML XML response to the Propfind request
      * @param path Path of the current resource
      * @param type Propfind type
@@ -2069,7 +2068,7 @@ public class WebdavServlet extends DefaultServlet {
             generatedXML.writeElement("D", "displayname", XMLWriter.CLOSING);
             if (isFile) {
                 generatedXML.writeProperty("D", "getlastmodified",
-                        FastHttpDateFormat.formatDate(lastModified, null));
+                        FastHttpDateFormat.formatDate(lastModified));
                 generatedXML.writeProperty("D", "getcontentlength", Long.toString(contentLength));
                 if (contentType != null) {
                     generatedXML.writeProperty("D", "getcontenttype", contentType);
@@ -2187,7 +2186,7 @@ public class WebdavServlet extends DefaultServlet {
                 } else if (property.equals("getlastmodified")) {
                     if (isFile) {
                         generatedXML.writeProperty("D", "getlastmodified",
-                                FastHttpDateFormat.formatDate(lastModified, null));
+                                FastHttpDateFormat.formatDate(lastModified));
                     } else {
                         propertiesNotFound.addElement(property);
                     }
@@ -2406,7 +2405,7 @@ public class WebdavServlet extends DefaultServlet {
             result.append("\nOwner:");
             result.append(owner);
             result.append("\nExpiration:");
-            result.append(FastHttpDateFormat.formatDate(expiresAt, null));
+            result.append(FastHttpDateFormat.formatDate(expiresAt));
             Enumeration<String> tokensList = tokens.elements();
             while (tokensList.hasMoreElements()) {
                 result.append("\nToken:");

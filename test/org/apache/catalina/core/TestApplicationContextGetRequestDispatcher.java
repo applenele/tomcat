@@ -353,6 +353,20 @@ public class TestApplicationContextGetRequestDispatcher extends TomcatBaseTest {
     }
 
 
+    @Test
+    public void testGetRequestDispatcher47() throws Exception {
+        doTestGetRequestDispatcher(true, "/prefix/start", null, "aa+bb",
+                "/prefix/aa+bb", TargetServlet.OK);
+    }
+
+
+    @Test
+    public void testGetRequestDispatcher48() throws Exception {
+        doTestGetRequestDispatcher(false, "/prefix/start", null, "aa+bb",
+                "/prefix/aa+bb", TargetServlet.OK);
+    }
+
+
     private void doTestGetRequestDispatcher(boolean useEncodedDispatchPaths, String startPath,
             String startQueryString, String dispatchPath, String targetPath, String expectedBody)
             throws Exception {
@@ -366,7 +380,7 @@ public class TestApplicationContextGetRequestDispatcher extends TomcatBaseTest {
 
         // Add a default servlet to return 404 for not found resources
         Tomcat.addServlet(ctx, "Default", new Default404Servlet());
-        ctx.addServletMappingDecoded("/*", "Default");
+        ctx.addServletMappingDecoded("/", "Default");
 
         // Add a target servlet to dispatch to
         Tomcat.addServlet(ctx, "target", new TargetServlet());
@@ -400,7 +414,7 @@ public class TestApplicationContextGetRequestDispatcher extends TomcatBaseTest {
     }
 
 
-    private static class Default404Servlet extends HttpServlet {
+    static class Default404Servlet extends HttpServlet {
 
         private static final long serialVersionUID = 1L;
         private static final String DEFAULT_404 = "DEFAULT-404";

@@ -199,10 +199,10 @@
 
       <attribute name="driverManagerProtection" required="false">
         <p>The first use of <code>java.sql.DriverManager</code> will trigger the
-        loading of JDBC Driver in the current class loader. The web
-        application level memory leak protection can take care of this in most
-        cases but triggering the loading here has fewer side-effects. The
-        default is <code>true</code>.</p>
+        loading of JDBC Drivers visible to the current class loader and its
+        parents. The web application level memory leak protection can take care
+        of this in most cases but triggering the loading here has fewer
+        side-effects. The default is <code>true</code>.</p>
       </attribute>
 
       <attribute name="forkJoinCommonPoolProtection" required="false">
@@ -212,7 +212,8 @@
         <code>java.util.concurrent.ForkJoinPool.common.threadFactory</code>
         system property. If this property is set when Tomcat starts, Tomcat will
         not over-ride it even if this protection is explicitly enabled. The
-        default is <code>true</code>.</p>
+        default is <code>true</code>.  This protection is disabled if running on
+        Java 9 onwards since the leak has been fixed for Java 9 onwards.</p>
       </attribute>
 
       <attribute name="gcDaemonProtection" required="false">
@@ -298,9 +299,11 @@
     <p>The <strong>Security Lifecycle Listener</strong> performs a number of
     security checks when Tomcat starts and prevents Tomcat from starting if they
     fail. The listener is not enabled by default. To enabled it uncomment the
-    listener in $CATALINA_BASE/conf/server.xml. If the operating system supports
-    umask then the line in $CATALINA_HOME/bin/catalina.sh that obtains the umask
-    also needs to be uncommented.</p>
+    listener in $CATALINA_BASE/conf/server.xml. For Tomcat versions before 9.0.7,
+    if the operating system supports umask then the line in
+    $CATALINA_HOME/bin/catalina.sh that obtains the umask also needs to be
+    uncommented. For Tomcat 9.0.7 and later, the umask is automatically
+    passed-into Tomcat.</p>
 
     <p>This listener must only be nested within <a href="server.html">Server</a>
     elements.</p>

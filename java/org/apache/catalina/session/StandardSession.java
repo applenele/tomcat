@@ -1375,6 +1375,8 @@ public class StandardSession implements HttpSession, Session, Serializable {
     public void setAttribute(String name, Object value) {
         setAttribute(name,value,true);
     }
+
+
     /**
      * Bind an object to this session, using the specified name.  If an object
      * of the same name is already bound to this session, the object is
@@ -1392,13 +1394,13 @@ public class StandardSession implements HttpSession, Session, Serializable {
      * @exception IllegalStateException if this method is called on an
      *  invalidated session
      */
-
     public void setAttribute(String name, Object value, boolean notify) {
 
         // Name cannot be null
-        if (name == null)
-            throw new IllegalArgumentException
-                (sm.getString("standardSession.setAttribute.namenull"));
+        if (name == null) {
+            throw new IllegalArgumentException(
+                    sm.getString("standardSession.setAttribute.namenull"));
+        }
 
         // Null value is the same as removeAttribute()
         if (value == null) {
@@ -1408,13 +1410,13 @@ public class StandardSession implements HttpSession, Session, Serializable {
 
         // Validate our current state
         if (!isValidInternal()) {
-            throw new IllegalStateException(sm.getString(
-                    "standardSession.setAttribute.ise", getIdInternal()));
+            throw new IllegalStateException(
+                    sm.getString("standardSession.setAttribute.ise", getIdInternal()));
         }
         if ((manager != null) && manager.getContext().getDistributable() &&
                 !isAttributeDistributable(name, value) && !exclude(name, value)) {
-            throw new IllegalArgumentException(sm.getString(
-                    "standardSession.setAttribute.iae", name));
+            throw new IllegalArgumentException(
+                    sm.getString("standardSession.setAttribute.iae", name));
         }
         // Construct an event with the new value
         HttpSessionBindingEvent event = null;
@@ -1422,14 +1424,15 @@ public class StandardSession implements HttpSession, Session, Serializable {
         // Call the valueBound() method if necessary
         if (notify && value instanceof HttpSessionBindingListener) {
             // Don't call any notification if replacing with the same value
+            // unless configured to do so
             Object oldValue = attributes.get(name);
-            if (value != oldValue) {
+            if (value != oldValue || manager.getNotifyBindingListenerOnUnchangedValue()) {
                 event = new HttpSessionBindingEvent(getSession(), name, value);
                 try {
                     ((HttpSessionBindingListener) value).valueBound(event);
                 } catch (Throwable t){
-                    manager.getContext().getLogger().error
-                    (sm.getString("standardSession.bindingEvent"), t);
+                    manager.getContext().getLogger().error(
+                            sm.getString("standardSession.bindingEvent"), t);
                 }
             }
         }
@@ -1438,75 +1441,76 @@ public class StandardSession implements HttpSession, Session, Serializable {
         Object unbound = attributes.put(name, value);
 
         // Call the valueUnbound() method if necessary
-        if (notify && (unbound != null) && (unbound != value) &&
-            (unbound instanceof HttpSessionBindingListener)) {
-            try {
-                ((HttpSessionBindingListener) unbound).valueUnbound
-                    (new HttpSessionBindingEvent(getSession(), name));
-            } catch (Throwable t) {
-                ExceptionUtils.handleThrowable(t);
-                manager.getContext().getLogger().error
-                    (sm.getString("standardSession.bindingEvent"), t);
+        if (notify && unbound instanceof HttpSessionBindingListener) {
+            // Don't call any notification if replacing with the same value
+            // unless configured to do so
+            if (unbound != value || manager.getNotifyBindingListenerOnUnchangedValue()) {
+                try {
+                    ((HttpSessionBindingListener) unbound).valueUnbound
+                        (new HttpSessionBindingEvent(getSession(), name));
+                } catch (Throwable t) {
+                    ExceptionUtils.handleThrowable(t);
+                    manager.getContext().getLogger().error
+                        (sm.getString("standardSession.bindingEvent"), t);
+                }
             }
         }
 
-        if ( !notify ) return;
+        if (!notify) {
+            return;
+        }
 
         // Notify interested application event listeners
         Context context = manager.getContext();
         Object listeners[] = context.getApplicationEventListeners();
-        if (listeners == null)
+        if (listeners == null) {
             return;
+        }
         for (int i = 0; i < listeners.length; i++) {
-            if (!(listeners[i] instanceof HttpSessionAttributeListener))
+            if (!(listeners[i] instanceof HttpSessionAttributeListener)) {
                 continue;
-            HttpSessionAttributeListener listener =
-                (HttpSessionAttributeListener) listeners[i];
+            }
+            HttpSessionAttributeListener listener = (HttpSessionAttributeListener) listeners[i];
             try {
                 if (unbound != null) {
-                    context.fireContainerEvent("beforeSessionAttributeReplaced",
-                            listener);
-                    if (event == null) {
-                        event = new HttpSessionBindingEvent
-                            (getSession(), name, unbound);
+                    if (unbound != value || manager.getNotifyAttributeListenerOnUnchangedValue()) {
+                        context.fireContainerEvent("beforeSessionAttributeReplaced", listener);
+                        if (event == null) {
+                            event = new HttpSessionBindingEvent(getSession(), name, unbound);
+                        }
+                        listener.attributeReplaced(event);
+                        context.fireContainerEvent("afterSessionAttributeReplaced", listener);
                     }
-                    listener.attributeReplaced(event);
-                    context.fireContainerEvent("afterSessionAttributeReplaced",
-                            listener);
                 } else {
-                    context.fireContainerEvent("beforeSessionAttributeAdded",
-                            listener);
+                    context.fireContainerEvent("beforeSessionAttributeAdded", listener);
                     if (event == null) {
-                        event = new HttpSessionBindingEvent
-                            (getSession(), name, value);
+                        event = new HttpSessionBindingEvent(getSession(), name, value);
                     }
                     listener.attributeAdded(event);
-                    context.fireContainerEvent("afterSessionAttributeAdded",
-                            listener);
+                    context.fireContainerEvent("afterSessionAttributeAdded", listener);
                 }
             } catch (Throwable t) {
                 ExceptionUtils.handleThrowable(t);
                 try {
                     if (unbound != null) {
-                        context.fireContainerEvent(
-                                "afterSessionAttributeReplaced", listener);
+                        if (unbound != value ||
+                                manager.getNotifyAttributeListenerOnUnchangedValue()) {
+                            context.fireContainerEvent("afterSessionAttributeReplaced", listener);
+                        }
                     } else {
-                        context.fireContainerEvent("afterSessionAttributeAdded",
-                                listener);
+                        context.fireContainerEvent("afterSessionAttributeAdded", listener);
                     }
                 } catch (Exception e) {
                     // Ignore
                 }
-                manager.getContext().getLogger().error
-                    (sm.getString("standardSession.attributeEvent"), t);
+                manager.getContext().getLogger().error(
+                        sm.getString("standardSession.attributeEvent"), t);
             }
         }
-
     }
 
 
     // ------------------------------------------ HttpSession Protected Methods
-
 
     /**
      * @return the <code>isValid</code> flag for this session without any expiration

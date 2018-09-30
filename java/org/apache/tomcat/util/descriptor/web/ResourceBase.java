@@ -33,8 +33,8 @@ public class ResourceBase implements Serializable, Injectable {
 
     private static final long serialVersionUID = 1L;
 
-    // ------------------------------------------------------------- Properties
 
+    // ------------------------------------------------------------- Properties
 
     /**
      * The description of this resource.
@@ -77,6 +77,21 @@ public class ResourceBase implements Serializable, Injectable {
 
     public void setType(String type) {
         this.type = type;
+    }
+
+
+    private String lookupName = null;
+
+    public String getLookupName() {
+        return lookupName;
+    }
+
+    public void setLookupName(String lookupName) {
+        if (lookupName == null || lookupName.length() == 0) {
+            this.lookupName = null;
+            return;
+        }
+        this.lookupName = lookupName;
     }
 
 
@@ -136,14 +151,12 @@ public class ResourceBase implements Serializable, Injectable {
     public int hashCode() {
         final int prime = 31;
         int result = 1;
-        result = prime * result +
-                ((description == null) ? 0 : description.hashCode());
-        result = prime * result +
-                ((injectionTargets == null) ? 0 : injectionTargets.hashCode());
+        result = prime * result + ((description == null) ? 0 : description.hashCode());
+        result = prime * result + ((injectionTargets == null) ? 0 : injectionTargets.hashCode());
         result = prime * result + ((name == null) ? 0 : name.hashCode());
-        result = prime * result +
-                ((properties == null) ? 0 : properties.hashCode());
+        result = prime * result + ((properties == null) ? 0 : properties.hashCode());
         result = prime * result + ((type == null) ? 0 : type.hashCode());
+        result = prime * result + ((lookupName == null) ? 0 : lookupName.hashCode());
         return result;
     }
 
@@ -195,11 +208,16 @@ public class ResourceBase implements Serializable, Injectable {
         } else if (!type.equals(other.type)) {
             return false;
         }
+        if (lookupName == null) {
+            if (other.lookupName != null) {
+                return false;
+            }
+        } else if (!lookupName.equals(other.lookupName)) {
+            return false;
+        }
         return true;
     }
 
-
-    // -------------------------------------------------------- Package Methods
 
     /**
      * The NamingResources with which we are associated (if any).

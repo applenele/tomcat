@@ -17,6 +17,7 @@
 package org.apache.catalina.tribes.group;
 
 
+import java.io.IOException;
 import java.io.Serializable;
 import java.util.Iterator;
 import java.util.List;
@@ -186,6 +187,7 @@ public class GroupChannel extends ChannelInterceptorBase
     @Override
     public void heartbeat() {
         super.heartbeat();
+
         for (MembershipListener listener : membershipListeners) {
             if ( listener instanceof Heartbeat ) ((Heartbeat)listener).heartbeat();
         }
@@ -267,9 +269,8 @@ public class GroupChannel extends ChannelInterceptorBase
             }
 
             return new UniqueId(data.getUniqueId());
-        }catch ( Exception x ) {
-            if ( x instanceof ChannelException ) throw (ChannelException)x;
-            throw new ChannelException(x);
+        } catch (RuntimeException | IOException e) {
+            throw new ChannelException(e);
         } finally {
             if ( buffer != null ) BufferPool.getBufferPool().returnBuffer(buffer);
         }

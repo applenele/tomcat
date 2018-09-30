@@ -81,6 +81,31 @@ public class TestRewriteValve extends TomcatBaseTest {
                 "RewriteRule /b/(.*).html$ /c/${mapa:$1|dd}", "/b/x.html", "/c/dd");
     }
 
+    // BZ 62667
+    @Test
+    public void testRewriteMap03() throws Exception {
+        doTestRewrite("RewriteMap mapa org.apache.catalina.valves.rewrite.TesterRewriteMapA\n" +
+                "RewriteRule /b/(.*).html$ /c/${mapa:$1|d$1d}", "/b/x.html", "/c/dxd");
+    }
+
+    @Test
+    public void testRewriteMap04() throws Exception {
+        doTestRewrite("RewriteMap mapa org.apache.catalina.valves.rewrite.TesterRewriteMapA\n" +
+                "RewriteRule /b/(.*).html$ /c/${mapa:a$1|dd}", "/b/a.html", "/c/aaaa");
+    }
+
+    @Test
+    public void testRewriteMap05() throws Exception {
+        doTestRewrite("RewriteMap mapa org.apache.catalina.valves.rewrite.TesterRewriteMapA\n" +
+                "RewriteRule /b/.* /c/${mapa:a}", "/b/a.html", "/c/aa");
+    }
+
+    @Test
+    public void testRewriteMap06() throws Exception {
+        doTestRewrite("RewriteMap mapa org.apache.catalina.valves.rewrite.TesterRewriteMapA\n" +
+                "RewriteRule /b/.* /c/${mapa:${mapa:a}}", "/b/a.html", "/c/aaaa");
+    }
+
     @Test
     public void testRewriteServerVar() throws Exception {
         doTestRewrite("RewriteRule /b/(.*).html$ /c%{SERVLET_PATH}", "/b/x.html", "/c/b/x.html");
@@ -147,6 +172,11 @@ public class TestRewriteValve extends TomcatBaseTest {
     @Test
     public void testQueryStringRemove() throws Exception {
         doTestRewrite("RewriteRule ^/b/(.*) /c/$1?", "/b/d?=1", "/c/d", null);
+    }
+
+    @Test
+    public void testQueryStringRemove02() throws Exception {
+        doTestRewrite("RewriteRule ^/b/(.*) /c/$1 [QSD]", "/b/d?=1", "/c/d", null);
     }
 
     @Test
@@ -486,29 +516,15 @@ public class TestRewriteValve extends TomcatBaseTest {
 
     @Test
     public void testDefaultRedirect() throws Exception {
-         // Disable the following of redirects for this test only
-        boolean originalValue = HttpURLConnection.getFollowRedirects();
-        HttpURLConnection.setFollowRedirects(false);
-        try {
-            doTestRedirect("RewriteRule ^/from/a$ /to/b [R]", "/redirect/from/a", "/redirect/to/b",
+        doTestRedirect("RewriteRule ^/from/a$ /to/b [R]", "/redirect/from/a", "/redirect/to/b",
                 302);
-        } finally {
-            HttpURLConnection.setFollowRedirects(originalValue);
-        }
     }
 
 
     @Test
     public void testTempRedirect() throws Exception {
-         // Disable the following of redirects for this test only
-        boolean originalValue = HttpURLConnection.getFollowRedirects();
-        HttpURLConnection.setFollowRedirects(false);
-        try {
-            doTestRedirect("RewriteRule ^/from/a$ /to/b [R=temp]", "/redirect/from/a", "/redirect/to/b",
+        doTestRedirect("RewriteRule ^/from/a$ /to/b [R=temp]", "/redirect/from/a", "/redirect/to/b",
                 302);
-        } finally {
-            HttpURLConnection.setFollowRedirects(originalValue);
-        }
     }
 
 
@@ -645,7 +661,8 @@ public class TestRewriteValve extends TomcatBaseTest {
 
         ByteChunk res = new ByteChunk();
         Map<String, List<String>> resHead = new HashMap<>();
-        int rc = getUrl("http://localhost:" + getPort() + request, res, null, resHead);
+        int rc = methodUrl("http://localhost:" + getPort() + request, res,
+                DEFAULT_CLIENT_TIMEOUT_MS, null, resHead, "GET", false);
         res.setCharset(StandardCharsets.UTF_8);
 
         if (expectedURI == null) {

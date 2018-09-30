@@ -76,8 +76,8 @@ import org.apache.tomcat.dbcp.pool2.PooledObjectState;
  *
  * @since 2.0
  */
-public class GenericKeyedObjectPool<K,T> extends BaseGenericObjectPool<T>
-        implements KeyedObjectPool<K,T>, GenericKeyedObjectPoolMXBean<K> {
+public class GenericKeyedObjectPool<K, T> extends BaseGenericObjectPool<T>
+        implements KeyedObjectPool<K, T>, GenericKeyedObjectPoolMXBean<K> {
 
     /**
      * Create a new <code>GenericKeyedObjectPool</code> using defaults from
@@ -85,7 +85,7 @@ public class GenericKeyedObjectPool<K,T> extends BaseGenericObjectPool<T>
      * @param factory the factory to be used to create entries
      */
     public GenericKeyedObjectPool(final KeyedPooledObjectFactory<K,T> factory) {
-        this(factory, new GenericKeyedObjectPoolConfig());
+        this(factory, new GenericKeyedObjectPoolConfig<T>());
     }
 
     /**
@@ -98,8 +98,8 @@ public class GenericKeyedObjectPool<K,T> extends BaseGenericObjectPool<T>
      *                  the configuration object will not be reflected in the
      *                  pool.
      */
-    public GenericKeyedObjectPool(final KeyedPooledObjectFactory<K,T> factory,
-            final GenericKeyedObjectPoolConfig config) {
+    public GenericKeyedObjectPool(final KeyedPooledObjectFactory<K, T> factory,
+            final GenericKeyedObjectPoolConfig<T> config) {
 
         super(config, ONAME_BASE, config.getJmxNamePrefix());
 
@@ -111,8 +111,6 @@ public class GenericKeyedObjectPool<K,T> extends BaseGenericObjectPool<T>
         this.fairness = config.getFairness();
 
         setConfig(config);
-
-        startEvictor(getTimeBetweenEvictionRunsMillis());
     }
 
     /**
@@ -237,26 +235,12 @@ public class GenericKeyedObjectPool<K,T> extends BaseGenericObjectPool<T>
      *
      * @see GenericKeyedObjectPoolConfig
      */
-    public void setConfig(final GenericKeyedObjectPoolConfig conf) {
-        setLifo(conf.getLifo());
+    public void setConfig(final GenericKeyedObjectPoolConfig<T> conf) {
+        super.setConfig(conf);
         setMaxIdlePerKey(conf.getMaxIdlePerKey());
         setMaxTotalPerKey(conf.getMaxTotalPerKey());
         setMaxTotal(conf.getMaxTotal());
         setMinIdlePerKey(conf.getMinIdlePerKey());
-        setMaxWaitMillis(conf.getMaxWaitMillis());
-        setBlockWhenExhausted(conf.getBlockWhenExhausted());
-        setTestOnCreate(conf.getTestOnCreate());
-        setTestOnBorrow(conf.getTestOnBorrow());
-        setTestOnReturn(conf.getTestOnReturn());
-        setTestWhileIdle(conf.getTestWhileIdle());
-        setNumTestsPerEvictionRun(conf.getNumTestsPerEvictionRun());
-        setMinEvictableIdleTimeMillis(conf.getMinEvictableIdleTimeMillis());
-        setSoftMinEvictableIdleTimeMillis(
-                conf.getSoftMinEvictableIdleTimeMillis());
-        setTimeBetweenEvictionRunsMillis(
-                conf.getTimeBetweenEvictionRunsMillis());
-        setEvictionPolicyClassName(conf.getEvictionPolicyClassName());
-        setEvictorShutdownTimeoutMillis(conf.getEvictorShutdownTimeoutMillis());
     }
 
     /**
@@ -470,34 +454,19 @@ public class GenericKeyedObjectPool<K,T> extends BaseGenericObjectPool<T>
                     "Returned object not currently part of this pool");
         }
 
-        synchronized(p) {
-            final PooledObjectState state = p.getState();
-            if (state != PooledObjectState.ALLOCATED) {
-                throw new IllegalStateException(
-                        "Object has already been returned to this pool or is invalid");
-            }
-            p.markReturning(); // Keep from being marked abandoned (once GKOP does this)
-        }
+        markReturningState(p);
 
         final long activeTime = p.getActiveTimeMillis();
 
         try {
-            if (getTestOnReturn()) {
-                if (!factory.validateObject(key, p)) {
-                    try {
-                        destroy(key, p, true);
-                    } catch (final Exception e) {
-                        swallowException(e);
-                    }
-                    if (objectDeque.idleObjects.hasTakeWaiters()) {
-                        try {
-                            addObject(key);
-                        } catch (final Exception e) {
-                            swallowException(e);
-                        }
-                    }
-                    return;
+            if (getTestOnReturn() && !factory.validateObject(key, p)) {
+                try {
+                    destroy(key, p, true);
+                } catch (final Exception e) {
+                    swallowException(e);
                 }
+                whenWaitersAddObject(key, objectDeque.idleObjects);
+                return;
             }
 
             try {
@@ -509,13 +478,7 @@ public class GenericKeyedObjectPool<K,T> extends BaseGenericObjectPool<T>
                 } catch (final Exception e) {
                     swallowException(e);
                 }
-                if (objectDeque.idleObjects.hasTakeWaiters()) {
-                    try {
-                        addObject(key);
-                    } catch (final Exception e) {
-                        swallowException(e);
-                    }
-                }
+                whenWaitersAddObject(key, objectDeque.idleObjects);
                 return;
             }
 
@@ -555,6 +518,20 @@ public class GenericKeyedObjectPool<K,T> extends BaseGenericObjectPool<T>
         }
     }
 
+    /**
+     * Whether there is at least one thread waiting on this deque, add an pool object.
+     * @param key
+     * @param idleObjects
+     */
+    private void whenWaitersAddObject(final K key, final LinkedBlockingDeque<PooledObject<T>> idleObjects) {
+        if (idleObjects.hasTakeWaiters()) {
+            try {
+                addObject(key);
+            } catch (final Exception e) {
+                swallowException(e);
+            }
+        }
+    }
 
     /**
      * {@inheritDoc}
@@ -712,7 +689,7 @@ public class GenericKeyedObjectPool<K,T> extends BaseGenericObjectPool<T>
 
             // Stop the evictor before the pool is closed since evict() calls
             // assertOpen()
-            startEvictor(-1L);
+            stopEvitor();
 
             closed = true;
             // This clear removes any idle objects

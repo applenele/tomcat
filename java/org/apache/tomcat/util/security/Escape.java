@@ -23,6 +23,11 @@ package org.apache.tomcat.util.security;
  */
 public class Escape {
 
+    private Escape() {
+        // Hide default constructor for this utility class
+    }
+
+
     /**
      * Escape content for use in HTML. This escaping is suitable for the
      * following uses:
@@ -77,7 +82,7 @@ public class Escape {
      * @return The escaped content or <code>&quot;?&quot;</code> if obj is
      *         {@code null}
      */
-    public static String htmlElementContext(Object obj) {
+    public static String htmlElementContent(Object obj) {
         if (obj == null) {
             return "?";
         }

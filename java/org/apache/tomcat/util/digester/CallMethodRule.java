@@ -34,7 +34,7 @@ import org.xml.sax.Attributes;
  * </p>
  *
  * <p>This rule now uses
- * <a href="http://commons.apache.org/beanutils/apidocs/org/apache/commons/beanutils/MethodUtils.html">
+ * <a href="https://commons.apache.org/beanutils/apidocs/org/apache/commons/beanutils/MethodUtils.html">
  * org.apache.commons.beanutils.MethodUtils#invokeMethod
  * </a> by default.
  * This increases the kinds of methods successfully and allows primitives
@@ -317,10 +317,12 @@ public class CallMethodRule extends Rule {
         for (int i = 0; i < paramTypes.length; i++) {
             // convert nulls and convert stringy parameters
             // for non-stringy param types
-            if(
-                parameters[i] == null ||
-                 (parameters[i] instanceof String &&
-                   !String.class.isAssignableFrom(paramTypes[i]))) {
+            Object param = parameters[i];
+            // Tolerate null non-primitive values
+            if(null == param && !paramTypes[i].isPrimitive())
+                paramValues[i] = null;
+            else if(param instanceof String &&
+                    !String.class.isAssignableFrom(paramTypes[i])) {
 
                 paramValues[i] =
                         IntrospectionUtils.convert((String) parameters[i], paramTypes[i]);

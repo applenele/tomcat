@@ -61,7 +61,7 @@ public abstract class AbstractReplicatedMap<K,V>
 
     protected static final StringManager sm = StringManager.getManager(AbstractReplicatedMap.class);
 
-    private final Log log = LogFactory.getLog(AbstractReplicatedMap.class);
+    private final Log log = LogFactory.getLog(AbstractReplicatedMap.class); // must not be static
 
     /**
      * The default initial capacity - MUST be a power of two.
@@ -1033,7 +1033,7 @@ public abstract class AbstractReplicatedMap<K,V>
                 entry.setCopy(false);
                 if ( getMapOwner()!=null ) getMapOwner().objectMadePrimary(key, entry.getValue());
 
-            } catch (Exception x) {
+            } catch (RuntimeException | ChannelException | ClassNotFoundException | IOException x) {
                 log.error(sm.getString("abstractReplicatedMap.unable.get"), x);
                 return null;
             }
@@ -1422,6 +1422,7 @@ public abstract class AbstractReplicatedMap<K,V>
             buf.append(key);
             buf.append("; value=");
             buf.append(value);
+            buf.append("]");
             return buf.toString();
         }
 

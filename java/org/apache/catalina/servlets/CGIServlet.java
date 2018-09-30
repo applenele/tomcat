@@ -29,10 +29,12 @@ import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.Enumeration;
+import java.util.HashSet;
 import java.util.Hashtable;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map.Entry;
+import java.util.Set;
 import java.util.StringTokenizer;
 import java.util.Vector;
 import java.util.regex.Pattern;
@@ -125,7 +127,7 @@ import org.apache.tomcat.util.res.StringManager;
  * or an instance where the specification cited differs from Best
  * Community Practice (BCP).
  * Such instances should be well-documented here.  Please email the
- * <a href="http://tomcat.apache.org/lists.html">Tomcat group</a>
+ * <a href="https://tomcat.apache.org/lists.html">Tomcat group</a>
  * with amendments.
  *
  * </p>
@@ -242,6 +244,14 @@ public final class CGIServlet extends HttpServlet {
 
     private static final long serialVersionUID = 1L;
 
+    private static final Set<String> DEFAULT_SUPER_METHODS = new HashSet<>();
+    static {
+        DEFAULT_SUPER_METHODS.add("HEAD");
+        DEFAULT_SUPER_METHODS.add("OPTIONS");
+        DEFAULT_SUPER_METHODS.add("TRACE");
+    }
+
+
     /**
      *  The CGI search path will start at
      *    webAppRootDir + File.separator + cgiPathPrefix
@@ -259,6 +269,11 @@ public final class CGIServlet extends HttpServlet {
     /** the encoding to use for parameters */
     private String parameterEncoding =
         System.getProperty("file.encoding", "UTF-8");
+
+    /* The HTTP methods this Servlet will pass to the CGI script */
+    private Set<String> cgiMethods = new HashSet<>();
+    private boolean cgiMethodsAll = false;
+
 
     /**
      * The time (in milliseconds) to wait for the reading of stderr to complete
@@ -363,6 +378,23 @@ public final class CGIServlet extends HttpServlet {
         if (getServletConfig().getInitParameter("enableCmdLineArguments") != null) {
             enableCmdLineArguments =
                     Boolean.parseBoolean(config.getInitParameter("enableCmdLineArguments"));
+        }
+
+        if (getServletConfig().getInitParameter("cgiMethods") != null) {
+            String paramValue = getServletConfig().getInitParameter("cgiMethods");
+            paramValue.trim();
+            if ("*".equals(paramValue)) {
+                cgiMethodsAll = true;
+            } else {
+                String[] methods = paramValue.split(",");
+                for (String method : methods) {
+                    String trimmedMethod = method.trim();
+                    cgiMethods.add(trimmedMethod);
+                }
+            }
+        } else {
+            cgiMethods.add("GET");
+            cgiMethods.add("POST");
         }
     }
 
@@ -497,20 +529,21 @@ public final class CGIServlet extends HttpServlet {
     }
 
 
-    /**
-     * Provides CGI Gateway service -- delegates to
-     * {@link #doGet(HttpServletRequest, HttpServletResponse)}.
-     *
-     * @param  req   HttpServletRequest passed in by servlet container
-     * @param  res   HttpServletResponse passed in by servlet container
-     *
-     * @exception  ServletException  if a servlet-specific exception occurs
-     * @exception  IOException  if a read/write exception occurs
-     */
     @Override
-    protected void doPost(HttpServletRequest req, HttpServletResponse res)
-            throws IOException, ServletException {
-        doGet(req, res);
+    protected void service(HttpServletRequest req, HttpServletResponse res)
+            throws ServletException, IOException {
+
+        String method = req.getMethod();
+        if (cgiMethodsAll || cgiMethods.contains(method)) {
+            doGet(req, res);
+        } else if (DEFAULT_SUPER_METHODS.contains(method)){
+            // If the CGI servlet is explicitly configured to handle one of
+            // these methods it will be handled in the previous condition
+            super.service(req, res);
+        } else {
+            // Unsupported method
+            res.sendError(HttpServletResponse.SC_METHOD_NOT_ALLOWED);
+        }
     }
 
 
@@ -552,6 +585,29 @@ public final class CGIServlet extends HttpServlet {
 
             printServletEnvironment(req);
         }
+    }
+
+
+    @Override
+    protected void doOptions(HttpServletRequest req, HttpServletResponse res)
+            throws ServletException, IOException {
+        // Note: This method will never be called if cgiMethods is "*" so that
+        //       case does nto need to be handled here.
+        Set<String> allowedMethods = new HashSet<>();
+        allowedMethods.addAll(cgiMethods);
+        allowedMethods.addAll(CGIServlet.DEFAULT_SUPER_METHODS);
+
+        StringBuilder headerValue = new StringBuilder();
+
+        for (String method : allowedMethods) {
+            headerValue.append(method);
+            headerValue.append(',');
+        }
+
+        // Remove trailing comma
+        headerValue.deleteCharAt(headerValue.length() - 1);
+
+        res.setHeader("allow", headerValue.toString());
     }
 
 
@@ -1161,7 +1217,7 @@ public final class CGIServlet extends HttpServlet {
                 sb.append(System.lineSeparator());
                 sb.append("Check the HttpServletRequest pathInfo property to see if it is what ");
                 sb.append(System.lineSeparator());
-                sb.append("you meant it to be. You must specify an existant and executable file ");
+                sb.append("you meant it to be. You must specify an existent and executable file ");
                 sb.append(System.lineSeparator());
                 sb.append("as part of the path-info.");
                 sb.append(System.lineSeparator());
@@ -1425,7 +1481,7 @@ public final class CGIServlet extends HttpServlet {
          * directory, and input/output streams
          *
          * <p>
-         * This implements the following CGI specification recommedations:
+         * This implements the following CGI specification recommendations:
          * </p>
          * <UL>
          * <LI> Servers SHOULD provide the "<code>query</code>" component of

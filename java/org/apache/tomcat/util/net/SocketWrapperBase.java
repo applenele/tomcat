@@ -19,9 +19,7 @@ package org.apache.tomcat.util.net;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.CompletionHandler;
-import java.util.Iterator;
 import java.util.concurrent.Executor;
-import java.util.concurrent.LinkedBlockingDeque;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Lock;
@@ -30,7 +28,6 @@ import java.util.concurrent.locks.ReentrantReadWriteLock.WriteLock;
 
 import org.apache.juli.logging.Log;
 import org.apache.juli.logging.LogFactory;
-import org.apache.tomcat.util.buf.ByteBufferHolder;
 import org.apache.tomcat.util.res.StringManager;
 
 public abstract class SocketWrapperBase<E> {
@@ -80,17 +77,21 @@ public abstract class SocketWrapperBase<E> {
     protected volatile SocketBufferHandler socketBufferHandler = null;
 
     /**
-     * For "non-blocking" writes use an external set of buffers. Although the
-     * API only allows one non-blocking write at a time, due to buffering and
-     * the possible need to write HTTP headers, there may be more than one write
-     * to the OutputBuffer.
-     */
-    protected final LinkedBlockingDeque<ByteBufferHolder> bufferedWrites = new LinkedBlockingDeque<>();
-
-    /**
-     * The max size of the buffered write buffer
+     * The max size of the individual buffered write buffers
      */
     protected int bufferedWriteSize = 64 * 1024; // 64k default write buffer
+
+    /**
+     * Additional buffer used for non-blocking writes. Non-blocking writes need
+     * to return immediately even if the data cannot be written immediately but
+     * the socket buffer may not be big enough to hold all of the unwritten
+     * data. This structure provides an additional buffer to hold the data until
+     * it can be written.
+     * Not that while the Servlet API only allows one non-blocking write at a
+     * time, due to buffering and the possible need to write HTTP headers, this
+     * layer may see multiple writes.
+     */
+    protected final WriteBuffer nonBlockingWriteBuffer = new WriteBuffer(bufferedWriteSize);
 
     public SocketWrapperBase(E socket, AbstractEndpoint<E,?> endpoint) {
         this.socket = socket;
@@ -252,7 +253,7 @@ public abstract class SocketWrapperBase<E> {
     public SocketBufferHandler getSocketBufferHandler() { return socketBufferHandler; }
 
     public boolean hasDataToWrite() {
-        return !socketBufferHandler.isWriteBufferEmpty() || bufferedWrites.size() > 0;
+        return !socketBufferHandler.isWriteBufferEmpty() || !nonBlockingWriteBuffer.isEmpty();
     }
 
     /**
@@ -282,7 +283,7 @@ public abstract class SocketWrapperBase<E> {
         if (socketBufferHandler == null) {
             throw new IllegalStateException(sm.getString("socket.closed"));
         }
-        return socketBufferHandler.isWriteBufferWritable() && bufferedWrites.size() == 0;
+        return socketBufferHandler.isWriteBufferWritable() && nonBlockingWriteBuffer.isEmpty();
     }
 
 
@@ -357,9 +358,24 @@ public abstract class SocketWrapperBase<E> {
     public abstract void close() throws IOException;
     public abstract boolean isClosed();
 
+
     /**
-     * Writes the provided data to the socket, buffering any remaining data if
-     * used in non-blocking mode.
+     * Writes the provided data to the socket write buffer. If the socket write
+     * buffer fills during the write, the content of the socket write buffer is
+     * written to the network and this method starts to fill the socket write
+     * buffer again. Depending on the size of the data to write, there may be
+     * multiple writes to the network.
+     * <p>
+     * Non-blocking writes must return immediately and the byte array holding
+     * the data to be written must be immediately available for re-use. It may
+     * not be possible to write sufficient data to the network to allow this to
+     * happen. In this case data that cannot be written to the network and
+     * cannot be held by the socket buffer is stored in the non-blocking write
+     * buffer.
+     * <p>
+     * Note: There is an implementation assumption that, before switching from
+     *       non-blocking writes to blocking writes, any data remaining in the
+     *       non-blocking write buffer will have been written to the network.
      *
      * @param block <code>true</code> if a blocking write should be used,
      *                  otherwise a non-blocking write will be used
@@ -374,10 +390,16 @@ public abstract class SocketWrapperBase<E> {
             return;
         }
 
-        // While the implementations for blocking and non-blocking writes are
-        // very similar they have been split into separate methods to allow
-        // sub-classes to override them individually. NIO2, for example,
-        // overrides the non-blocking write but not the blocking write.
+        /*
+         * While the implementations for blocking and non-blocking writes are
+         * very similar they have been split into separate methods:
+         * - To allow sub-classes to override them individually. NIO2, for
+         *   example, overrides the non-blocking write but not the blocking
+         *   write.
+         * - To enable a marginally more efficient implemented for blocking
+         *   writes which do not require the additional checks related to the
+         *   use of the non-blocking write buffer
+         */
         if (block) {
             writeBlocking(buf, off, len);
         } else {
@@ -387,8 +409,22 @@ public abstract class SocketWrapperBase<E> {
 
 
     /**
-     * Writes the provided data to the socket, buffering any remaining data if
-     * used in non-blocking mode.
+     * Writes the provided data to the socket write buffer. If the socket write
+     * buffer fills during the write, the content of the socket write buffer is
+     * written to the network and this method starts to fill the socket write
+     * buffer again. Depending on the size of the data to write, there may be
+     * multiple writes to the network.
+     * <p>
+     * Non-blocking writes must return immediately and the ByteBuffer holding
+     * the data to be written must be immediately available for re-use. It may
+     * not be possible to write sufficient data to the network to allow this to
+     * happen. In this case data that cannot be written to the network and
+     * cannot be held by the socket buffer is stored in the non-blocking write
+     * buffer.
+     * <p>
+     * Note: There is an implementation assumption that, before switching from
+     *       non-blocking writes to blocking writes, any data remaining in the
+     *       non-blocking write buffer will have been written to the network.
      *
      * @param block  <code>true</code> if a blocking write should be used,
      *               otherwise a non-blocking write will be used
@@ -401,10 +437,16 @@ public abstract class SocketWrapperBase<E> {
             return;
         }
 
-        // While the implementations for blocking and non-blocking writes are
-        // very similar they have been split into separate methods to allow
-        // sub-classes to override them individually. NIO2, for example,
-        // overrides the non-blocking write but not the blocking write.
+        /*
+         * While the implementations for blocking and non-blocking writes are
+         * very similar they have been split into separate methods:
+         * - To allow sub-classes to override them individually. NIO2, for
+         *   example, overrides the non-blocking write but not the blocking
+         *   write.
+         * - To enable a marginally more efficient implemented for blocking
+         *   writes which do not require the additional checks related to the
+         *   use of the non-blocking write buffer
+         */
         if (block) {
             writeBlocking(from);
         } else {
@@ -414,9 +456,13 @@ public abstract class SocketWrapperBase<E> {
 
 
     /**
-     * Transfers the data to the socket write buffer (writing that data to the
-     * socket if the buffer fills up using a blocking write) until all the data
-     * has been transferred and space remains in the socket write buffer.
+     * Writes the provided data to the socket write buffer. If the socket write
+     * buffer fills during the write, the content of the socket write buffer is
+     * written to the network using a blocking write. Once that blocking write
+     * is complete, this method starts to fill the socket write buffer again.
+     * Depending on the size of the data to write, there may be multiple writes
+     * to the network. On completion of this method there will always be space
+     * remaining in the socket write buffer.
      *
      * @param buf   The byte array containing the data to be written
      * @param off   The offset within the byte array of the data to be written
@@ -425,13 +471,6 @@ public abstract class SocketWrapperBase<E> {
      * @throws IOException If an IO error occurs during the write
      */
     protected void writeBlocking(byte[] buf, int off, int len) throws IOException {
-        // Note: There is an implementation assumption that if the switch from
-        //       non-blocking to blocking has been made then any pending
-        //       non-blocking writes were flushed at the time the switch
-        //       occurred.
-
-        // Keep writing until all the data has been transferred to the socket
-        // write buffer and space remains in that buffer
         socketBufferHandler.configureWriteBufferForWrite();
         int thisTime = transfer(buf, off, len, socketBufferHandler.getWriteBuffer());
         while (socketBufferHandler.getWriteBuffer().remaining() == 0) {
@@ -445,38 +484,50 @@ public abstract class SocketWrapperBase<E> {
 
 
     /**
-     * Write the data to the socket (writing that data to the socket using a
-     * blocking write) until all the data has been transferred and space remains
-     * in the socket write buffer. If it is possible use the provided buffer
-     * directly and do not transfer to the socket write buffer.
+     * Writes the provided data to the socket write buffer. If the socket write
+     * buffer fills during the write, the content of the socket write buffer is
+     * written to the network using a blocking write. Once that blocking write
+     * is complete, this method starts to fill the socket write buffer again.
+     * Depending on the size of the data to write, there may be multiple writes
+     * to the network. On completion of this method there will always be space
+     * remaining in the socket write buffer.
      *
      * @param from The ByteBuffer containing the data to be written
      *
      * @throws IOException If an IO error occurs during the write
      */
     protected void writeBlocking(ByteBuffer from) throws IOException {
-        // Note: There is an implementation assumption that if the switch from
-        // non-blocking to blocking has been made then any pending
-        // non-blocking writes were flushed at the time the switch
-        // occurred.
-
-        // If it is possible write the data to the socket directly from the
-        // provided buffer otherwise transfer it to the socket write buffer
         if (socketBufferHandler.isWriteBufferEmpty()) {
-            writeByteBufferBlocking(from);
+            // Socket write buffer is empty. Write the provided buffer directly
+            // to the network.
+            // TODO Shouldn't smaller writes be buffered anyway?
+            writeBlockingDirect(from);
         } else {
+            // Socket write buffer has some data.
             socketBufferHandler.configureWriteBufferForWrite();
+            // Put as much data as possible into the write buffer
             transfer(from, socketBufferHandler.getWriteBuffer());
+            // If the buffer is now full, write it to the network and then write
+            // the remaining data directly to the network.
             if (!socketBufferHandler.isWriteBufferWritable()) {
                 doWrite(true);
-                writeByteBufferBlocking(from);
+                writeBlockingDirect(from);
             }
         }
     }
 
 
-    protected void writeByteBufferBlocking(ByteBuffer from) throws IOException {
+    /**
+     * Writes directly to the network, bypassing the socket write buffer.
+     *
+     * @param from The ByteBuffer containing the data to be written
+     *
+     * @throws IOException If an IO error occurs during the write
+     */
+    protected void writeBlockingDirect(ByteBuffer from) throws IOException {
         // The socket write buffer capacity is socket.appWriteBufSize
+        // TODO This only matters when using TLS. For non-TLS connections it
+        //      should be possible to write the ByteBuffer in a single write
         int limit = socketBufferHandler.getWriteBuffer().capacity();
         int fromLimit = from.limit();
         while (from.remaining() >= limit) {
@@ -497,6 +548,11 @@ public abstract class SocketWrapperBase<E> {
      * socket if the buffer fills up using a non-blocking write) until either
      * all the data has been transferred and space remains in the socket write
      * buffer or a non-blocking write leaves data in the socket write buffer.
+     * After an incomplete write, any data remaining to be transferred to the
+     * socket write buffer will be copied to the socket write buffer. If the
+     * remaining data is too big for the socket write buffer, the socket write
+     * buffer will be filled and the additional data written to the non-blocking
+     * write buffer.
      *
      * @param buf   The byte array containing the data to be written
      * @param off   The offset within the byte array of the data to be written
@@ -505,7 +561,7 @@ public abstract class SocketWrapperBase<E> {
      * @throws IOException If an IO error occurs during the write
      */
     protected void writeNonBlocking(byte[] buf, int off, int len) throws IOException {
-        if (bufferedWrites.size() == 0 && socketBufferHandler.isWriteBufferWritable()) {
+        if (nonBlockingWriteBuffer.isEmpty() && socketBufferHandler.isWriteBufferWritable()) {
             socketBufferHandler.configureWriteBufferForWrite();
             int thisTime = transfer(buf, off, len, socketBufferHandler.getWriteBuffer());
             len = len - thisTime;
@@ -527,54 +583,68 @@ public abstract class SocketWrapperBase<E> {
 
         if (len > 0) {
             // Remaining data must be buffered
-            addToBuffers(buf, off, len);
+            nonBlockingWriteBuffer.add(buf, off, len);
         }
     }
 
 
     /**
-     * Writes the data to the socket (writing that data to the socket using a
-     * non-blocking write) until either all the data has been transferred and
-     * space remains in the socket write buffer or a non-blocking write leaves
-     * data in the socket write buffer. If it is possible use the provided
-     * buffer directly and do not transfer to the socket write buffer.
+     * Transfers the data to the socket write buffer (writing that data to the
+     * socket if the buffer fills up using a non-blocking write) until either
+     * all the data has been transferred and space remains in the socket write
+     * buffer or a non-blocking write leaves data in the socket write buffer.
+     * After an incomplete write, any data remaining to be transferred to the
+     * socket write buffer will be copied to the socket write buffer. If the
+     * remaining data is too big for the socket write buffer, the socket write
+     * buffer will be filled and the additional data written to the non-blocking
+     * write buffer.
      *
      * @param from The ByteBuffer containing the data to be written
      *
      * @throws IOException If an IO error occurs during the write
      */
-    protected void writeNonBlocking(ByteBuffer from) throws IOException {
-        if (bufferedWrites.size() == 0 && socketBufferHandler.isWriteBufferWritable()) {
+    protected void writeNonBlocking(ByteBuffer from)
+            throws IOException {
+
+        if (nonBlockingWriteBuffer.isEmpty() && socketBufferHandler.isWriteBufferWritable()) {
             writeNonBlockingInternal(from);
         }
 
         if (from.remaining() > 0) {
             // Remaining data must be buffered
-            addToBuffers(from);
+            nonBlockingWriteBuffer.add(from);
         }
     }
 
 
-    private boolean writeNonBlockingInternal(ByteBuffer from) throws IOException {
+    /**
+     * Separate method so it can be re-used by the socket write buffer to write
+     * data to the network
+     *
+     * @param from The ByteBuffer containing the data to be written
+     *
+     * @throws IOException If an IO error occurs during the write
+     */
+    protected void writeNonBlockingInternal(ByteBuffer from) throws IOException {
         if (socketBufferHandler.isWriteBufferEmpty()) {
-            return writeByteBufferNonBlocking(from);
+            writeNonBlockingDirect(from);
         } else {
             socketBufferHandler.configureWriteBufferForWrite();
             transfer(from, socketBufferHandler.getWriteBuffer());
             if (!socketBufferHandler.isWriteBufferWritable()) {
                 doWrite(false);
                 if (socketBufferHandler.isWriteBufferWritable()) {
-                    return writeByteBufferNonBlocking(from);
+                    writeNonBlockingDirect(from);
                 }
             }
         }
-
-        return !socketBufferHandler.isWriteBufferWritable();
     }
 
 
-    protected boolean writeByteBufferNonBlocking(ByteBuffer from) throws IOException {
+    protected void writeNonBlockingDirect(ByteBuffer from) throws IOException {
         // The socket write buffer capacity is socket.appWriteBufSize
+        // TODO This only matters when using TLS. For non-TLS connections it
+        //      should be possible to write the ByteBuffer in a single write
         int limit = socketBufferHandler.getWriteBuffer().capacity();
         int fromLimit = from.limit();
         while (from.remaining() >= limit) {
@@ -586,7 +656,7 @@ public abstract class SocketWrapperBase<E> {
                 // Didn't write the whole amount of data in the last
                 // non-blocking write.
                 // Exit the loop.
-                return true;
+                return;
             }
         }
 
@@ -594,8 +664,6 @@ public abstract class SocketWrapperBase<E> {
             socketBufferHandler.configureWriteBufferForWrite();
             transfer(from, socketBufferHandler.getWriteBuffer());
         }
-
-        return false;
     }
 
 
@@ -627,16 +695,8 @@ public abstract class SocketWrapperBase<E> {
     protected void flushBlocking() throws IOException {
         doWrite(true);
 
-        if (bufferedWrites.size() > 0) {
-            Iterator<ByteBufferHolder> bufIter = bufferedWrites.iterator();
-            while (bufIter.hasNext()) {
-                ByteBufferHolder buffer = bufIter.next();
-                buffer.flip();
-                writeBlocking(buffer.getBuf());
-                if (buffer.getBuf().remaining() == 0) {
-                    bufIter.remove();
-                }
-            }
+        if (!nonBlockingWriteBuffer.isEmpty()) {
+            nonBlockingWriteBuffer.write(this, true);
 
             if (!socketBufferHandler.isWriteBufferEmpty()) {
                 doWrite(true);
@@ -655,16 +715,8 @@ public abstract class SocketWrapperBase<E> {
             dataLeft = !socketBufferHandler.isWriteBufferEmpty();
         }
 
-        if (!dataLeft && bufferedWrites.size() > 0) {
-            Iterator<ByteBufferHolder> bufIter = bufferedWrites.iterator();
-            while (!dataLeft && bufIter.hasNext()) {
-                ByteBufferHolder buffer = bufIter.next();
-                buffer.flip();
-                dataLeft = writeNonBlockingInternal(buffer.getBuf());
-                if (buffer.getBuf().remaining() == 0) {
-                    bufIter.remove();
-                }
-            }
+        if (!dataLeft && !nonBlockingWriteBuffer.isEmpty()) {
+            dataLeft = nonBlockingWriteBuffer.write(this, false);
 
             if (!dataLeft && !socketBufferHandler.isWriteBufferEmpty()) {
                 doWrite(false);
@@ -704,29 +756,6 @@ public abstract class SocketWrapperBase<E> {
      *                     write
      */
     protected abstract void doWrite(boolean block, ByteBuffer from) throws IOException;
-
-
-    protected void addToBuffers(byte[] buf, int offset, int length) {
-        ByteBufferHolder holder = getByteBufferHolder(length);
-        holder.getBuf().put(buf, offset, length);
-    }
-
-
-    protected void addToBuffers(ByteBuffer from) {
-        ByteBufferHolder holder = getByteBufferHolder(from.remaining());
-        holder.getBuf().put(from);
-    }
-
-
-    private ByteBufferHolder getByteBufferHolder(int capacity) {
-        ByteBufferHolder holder = bufferedWrites.peekLast();
-        if (holder == null || holder.isFlipped() || holder.getBuf().remaining() < capacity) {
-            ByteBuffer buffer = ByteBuffer.allocate(Math.max(bufferedWriteSize, capacity));
-            holder = new ByteBufferHolder(buffer, false);
-            bufferedWrites.add(holder);
-        }
-        return holder;
-    }
 
 
     public void processSocket(SocketEvent socketStatus, boolean dispatch) {
@@ -864,6 +893,23 @@ public abstract class SocketWrapperBase<E> {
             }
             return (state == CompletionState.DONE) ? CompletionHandlerCall.DONE
                     : CompletionHandlerCall.NONE;
+        }
+    };
+
+    /**
+     * This utility CompletionCheck will cause the write to fully write
+     * all remaining data. The completion handler will then be called.
+     */
+    public static final CompletionCheck COMPLETE_WRITE_WITH_COMPLETION = new CompletionCheck() {
+        @Override
+        public CompletionHandlerCall callHandler(CompletionState state, ByteBuffer[] buffers,
+                int offset, int length) {
+            for (int i = 0; i < length; i++) {
+                if (buffers[offset + i].remaining() > 0) {
+                    return CompletionHandlerCall.CONTINUE;
+                }
+            }
+            return CompletionHandlerCall.DONE;
         }
     };
 

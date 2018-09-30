@@ -25,6 +25,11 @@ import org.apache.tomcat.util.buf.MessageBytes;
 
 public class Host {
 
+    private Host() {
+        // Utility class. Hide default constructor.
+    }
+
+
     /**
      * Parse the given input as a HTTP Host header value.
      *
@@ -35,10 +40,8 @@ public class Host {
      *
      * @throws IllegalArgumentException If the host header value is not
      *         specification compliant
-     *
-     * @throws IOException If a problem occurs reading the data from the input
      */
-    public static int parse(MessageBytes mb) throws IOException {
+    public static int parse(MessageBytes mb) {
         return parse(new MessageBytesReader(mb));
     }
 
@@ -53,27 +56,30 @@ public class Host {
      *
      * @throws IllegalArgumentException If the host header value is not
      *         specification compliant
-     *
-     * @throws IOException If a problem occurs reading the data from the input
      */
-    public static int parse(String string) throws IOException {
+    public static int parse(String string) {
         return parse(new StringReader(string));
     }
 
 
-    private static int parse(Reader reader) throws IOException {
-        reader.mark(1);
-        int first = reader.read();
-        reader.reset();
-        if (HttpParser.isAlpha(first)) {
-            return HttpParser.readHostDomainName(reader);
-        } else if (HttpParser.isNumeric(first)) {
-            return HttpParser.readHostIPv4(reader, false);
-        } else if ('[' == first) {
-            return HttpParser.readHostIPv6(reader);
-        } else {
-            // Invalid
-            throw new IllegalArgumentException();
+    private static int parse(Reader reader) {
+        try {
+            reader.mark(1);
+            int first = reader.read();
+            reader.reset();
+            if (HttpParser.isAlpha(first)) {
+                return HttpParser.readHostDomainName(reader);
+            } else if (HttpParser.isNumeric(first)) {
+                return HttpParser.readHostIPv4(reader, false);
+            } else if ('[' == first) {
+                return HttpParser.readHostIPv6(reader);
+            } else {
+                // Invalid
+                throw new IllegalArgumentException();
+            }
+        } catch (IOException ioe) {
+            // Should never happen
+            throw new IllegalArgumentException(ioe);
         }
     }
 

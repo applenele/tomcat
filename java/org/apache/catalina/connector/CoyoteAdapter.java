@@ -287,6 +287,7 @@ public class CoyoteAdapter implements Adapter {
             req.getRequestProcessor().setWorkerThreadName(null);
             // Recycle the wrapper request and response
             if (!success || !request.isAsync()) {
+                updateWrapperErrorCount(request, response);
                 request.recycle();
                 response.recycle();
             }
@@ -392,14 +393,25 @@ public class CoyoteAdapter implements Adapter {
                 // Log only if processing was invoked.
                 // If postParseRequest() failed, it has already logged it.
                 Context context = request.getContext();
+                Host host = request.getHost();
                 // If the context is null, it is likely that the endpoint was
                 // shutdown, this connection closed and the request recycled in
                 // a different thread. That thread will have updated the access
                 // log so it is OK not to update the access log here in that
                 // case.
+                // The other possibility is that an error occurred early in
+                // processing and the request could not be mapped to a Context.
+                // Log via the host or engine in that case.
+                long time = System.currentTimeMillis() - req.getStartTime();
                 if (context != null) {
-                    context.logAccess(request, response,
-                            System.currentTimeMillis() - req.getStartTime(), false);
+                    context.logAccess(request, response, time, false);
+                } else if (response.isError()) {
+                    if (host != null) {
+                        host.logAccess(request, response, time, false);
+                    } else {
+                        connector.getService().getContainer().logAccess(
+                                request, response, time, false);
+                    }
                 }
             }
 
@@ -407,8 +419,19 @@ public class CoyoteAdapter implements Adapter {
 
             // Recycle the wrapper request and response
             if (!async) {
+                updateWrapperErrorCount(request, response);
                 request.recycle();
                 response.recycle();
+            }
+        }
+    }
+
+
+    private void updateWrapperErrorCount(Request request, Response response) {
+        if (response.isError()) {
+            Wrapper wrapper = request.getWrapper();
+            if (wrapper != null) {
+                wrapper.incrementErrorCount();
             }
         }
     }
@@ -470,6 +493,7 @@ public class CoyoteAdapter implements Adapter {
             ExceptionUtils.handleThrowable(t);
             log.warn(sm.getString("coyoteAdapter.accesslogFail"), t);
         } finally {
+            updateWrapperErrorCount(request, response);
             request.recycle();
             response.recycle();
         }
@@ -580,21 +604,19 @@ public class CoyoteAdapter implements Adapter {
         if (undecodedURI.equals("*")) {
             if (req.method().equalsIgnoreCase("OPTIONS")) {
                 StringBuilder allow = new StringBuilder();
-                allow.append("GET, HEAD, POST, PUT, DELETE");
+                allow.append("GET, HEAD, POST, PUT, DELETE, OPTIONS");
                 // Trace if allowed
                 if (connector.getAllowTrace()) {
                     allow.append(", TRACE");
                 }
                 // Always allow options
-                allow.append(", OPTIONS");
                 res.setHeader("Allow", allow.toString());
+                // Access log entry as processing won't reach AccessLogValve
+                connector.getService().getContainer().logAccess(request, response, 0, true);
+                return false;
             } else {
-                res.setStatus(404);
-                res.setMessage("Not found");
+                response.sendError(400, "Invalid URI");
             }
-            connector.getService().getContainer().logAccess(
-                    request, response, 0, true);
-            return false;
         }
 
         MessageBytes decodedURI = req.decodedURI();
@@ -613,29 +635,17 @@ public class CoyoteAdapter implements Adapter {
             try {
                 req.getURLDecoder().convert(decodedURI, false);
             } catch (IOException ioe) {
-                res.setStatus(400);
-                res.setMessage("Invalid URI: " + ioe.getMessage());
-                connector.getService().getContainer().logAccess(
-                        request, response, 0, true);
-                return false;
+                response.sendError(400, "Invalid URI: " + ioe.getMessage());
             }
             // Normalization
             if (!normalize(req.decodedURI())) {
-                res.setStatus(400);
-                res.setMessage("Invalid URI");
-                connector.getService().getContainer().logAccess(
-                        request, response, 0, true);
-                return false;
+                response.sendError(400, "Invalid URI");
             }
             // Character decoding
             convertURI(decodedURI, request);
             // Check that the URI is still normalized
             if (!checkNormalize(req.decodedURI())) {
-                res.setStatus(400);
-                res.setMessage("Invalid URI character encoding");
-                connector.getService().getContainer().logAccess(
-                        request, response, 0, true);
-                return false;
+                response.sendError(400, "Invalid URI");
             }
         } else {
             /* The URI is chars or String, and has been sent using an in-memory
@@ -651,8 +661,7 @@ public class CoyoteAdapter implements Adapter {
             CharChunk uriCC = decodedURI.getCharChunk();
             int semicolon = uriCC.indexOf(';');
             if (semicolon > 0) {
-                decodedURI.setChars
-                    (uriCC.getBuffer(), uriCC.getStart(), semicolon);
+                decodedURI.setChars(uriCC.getBuffer(), uriCC.getStart(), semicolon);
             }
         }
 
@@ -674,23 +683,30 @@ public class CoyoteAdapter implements Adapter {
         Context versionContext = null;
         boolean mapRequired = true;
 
+        if (response.isError()) {
+            // An error this early means the URI is invalid. Ensure invalid data
+            // is not passed to the mapper. Note we still want the mapper to
+            // find the correct host.
+            decodedURI.recycle();
+        }
+
         while (mapRequired) {
             // This will map the the latest version by default
             connector.getService().getMapper().map(serverName, decodedURI,
                     version, request.getMappingData());
 
-            // If there is no context at this point, it is likely no ROOT context
-            // has been deployed
+            // If there is no context at this point, either this is a 404
+            // because no ROOT context has been deployed or the URI was invalid
+            // so no context could be mapped.
             if (request.getContext() == null) {
-                res.setStatus(404);
-                res.setMessage("Not found");
-                // No context, so use host
-                Host host = request.getHost();
-                // Make sure there is a host (might not be during shutdown)
-                if (host != null) {
-                    host.logAccess(request, response, 0, true);
+                // Don't overwrite an existing error
+                if (!response.isError()) {
+                    response.sendError(404, "Not found");
                 }
-                return false;
+                // Allow processing to continue.
+                // If present, the error reporting valve will provide a response
+                // body.
+                return true;
             }
 
             // Now we have the context, we can parse the session ID from the URL
@@ -812,11 +828,10 @@ public class CoyoteAdapter implements Adapter {
                     }
                 }
             }
-            res.setStatus(405);
             res.addHeader("Allow", header);
-            res.setMessage("TRACE method is not allowed");
-            request.getContext().logAccess(request, response, 0, true);
-            return false;
+            response.sendError(405, "TRACE method is not allowed");
+            // Safe to skip the remainder of this method.
+            return true;
         }
 
         doConnectorAuthenticationAuthorization(req, request);
@@ -834,12 +849,7 @@ public class CoyoteAdapter implements Adapter {
             }
             if (req.getRemoteUserNeedsAuthorization()) {
                 Authenticator authenticator = request.getContext().getAuthenticator();
-                if (authenticator == null) {
-                    // No security constraints configured for the application so
-                    // no need to authorize the user. Use the CoyotePrincipal to
-                    // provide the authenticated user.
-                    request.setUserPrincipal(new CoyotePrincipal(username));
-                } else if (!(authenticator instanceof AuthenticatorBase)) {
+                if (!(authenticator instanceof AuthenticatorBase)) {
                     if (log.isDebugEnabled()) {
                         log.debug(sm.getString("coyoteAdapter.authorize", username));
                     }

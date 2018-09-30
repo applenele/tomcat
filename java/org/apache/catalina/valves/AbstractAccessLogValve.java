@@ -52,13 +52,14 @@ import org.apache.juli.logging.Log;
 import org.apache.juli.logging.LogFactory;
 import org.apache.tomcat.util.ExceptionUtils;
 import org.apache.tomcat.util.collections.SynchronizedStack;
+import org.apache.tomcat.util.net.IPv6Utils;
 
 
 /**
  * <p>Abstract implementation of the <b>Valve</b> interface that generates a web
  * server access log with the detailed line contents matching a configurable
  * pattern. The syntax of the available patterns is similar to that supported by
- * the <a href="http://httpd.apache.org/">Apache HTTP Server</a>
+ * the <a href="https://httpd.apache.org/">Apache HTTP Server</a>
  * <code>mod_log_config</code> module.</p>
  *
  * <p>Patterns for the logged message may include constant text or any of the
@@ -108,7 +109,7 @@ import org.apache.tomcat.util.collections.SynchronizedStack;
  * There is also support to write information from the cookie, incoming
  * header, the Session or something else in the ServletRequest.<br>
  * It is modeled after the
- * <a href="http://httpd.apache.org/">Apache HTTP Server</a> log configuration
+ * <a href="https://httpd.apache.org/">Apache HTTP Server</a> log configuration
  * syntax:</p>
  * <ul>
  * <li><code>%{xxx}i</code> for incoming headers
@@ -173,6 +174,11 @@ public abstract class AbstractAccessLogValve extends ValveBase implements Access
      * enabled this component
      */
     protected boolean enabled = true;
+
+     /**
+     * Use IPv6 canonical representation format as defined by RFC 5952.
+     */
+    private boolean ipv6Canonical = false;
 
     /**
      * The pattern used to format our access log lines.
@@ -480,6 +486,16 @@ public abstract class AbstractAccessLogValve extends ValveBase implements Access
 
     // ------------------------------------------------------------- Properties
 
+    public boolean getIpv6Canonical() {
+        return ipv6Canonical;
+    }
+
+
+    public void setIpv6Canonical(boolean ipv6Canonical) {
+        this.ipv6Canonical = ipv6Canonical;
+    }
+
+
     /**
      * {@inheritDoc}
      * Default is <code>false</code>.
@@ -488,6 +504,7 @@ public abstract class AbstractAccessLogValve extends ValveBase implements Access
     public void setRequestAttributesEnabled(boolean requestAttributesEnabled) {
         this.requestAttributesEnabled = requestAttributesEnabled;
     }
+
 
     /**
      * {@inheritDoc}
@@ -794,9 +811,9 @@ public abstract class AbstractAccessLogValve extends ValveBase implements Access
      */
     protected static class LocalAddrElement implements AccessLogElement {
 
-        private static final String LOCAL_ADDR_VALUE;
+        private final String localAddrValue;
 
-        static {
+        public LocalAddrElement(boolean ipv6Canonical) {
             String init;
             try {
                 init = InetAddress.getLocalHost().getHostAddress();
@@ -804,13 +821,18 @@ public abstract class AbstractAccessLogValve extends ValveBase implements Access
                 ExceptionUtils.handleThrowable(e);
                 init = "127.0.0.1";
             }
-            LOCAL_ADDR_VALUE = init;
+
+            if (ipv6Canonical) {
+                localAddrValue = IPv6Utils.canonize(init);
+            } else {
+                localAddrValue = init;
+            }
         }
 
         @Override
         public void addElement(CharArrayWriter buf, Date date, Request request,
                 Response response, long time) {
-            buf.append(LOCAL_ADDR_VALUE);
+            buf.append(localAddrValue);
         }
     }
 
@@ -821,16 +843,22 @@ public abstract class AbstractAccessLogValve extends ValveBase implements Access
         @Override
         public void addElement(CharArrayWriter buf, Date date, Request request,
                 Response response, long time) {
+            String value = null;
             if (requestAttributesEnabled) {
                 Object addr = request.getAttribute(REMOTE_ADDR_ATTRIBUTE);
                 if (addr == null) {
-                    buf.append(request.getRemoteAddr());
+                    value = request.getRemoteAddr();
                 } else {
-                    buf.append(addr.toString());
+                    value = addr.toString();
                 }
             } else {
-                buf.append(request.getRemoteAddr());
+                value = request.getRemoteAddr();
             }
+
+            if (ipv6Canonical) {
+                value = IPv6Utils.canonize(value);
+            }
+            buf.append(value);
         }
     }
 
@@ -853,6 +881,10 @@ public abstract class AbstractAccessLogValve extends ValveBase implements Access
             }
             if (value == null || value.length() == 0) {
                 value = "-";
+            }
+
+            if (ipv6Canonical) {
+                value = IPv6Utils.canonize(value);
             }
             buf.append(value);
         }
@@ -1348,11 +1380,15 @@ public abstract class AbstractAccessLogValve extends ValveBase implements Access
     /**
      * write local server name - %v
      */
-    protected static class LocalServerNameElement implements AccessLogElement {
+    protected class LocalServerNameElement implements AccessLogElement {
         @Override
         public void addElement(CharArrayWriter buf, Date date, Request request,
                 Response response, long time) {
-            buf.append(request.getServerName());
+            if (ipv6Canonical) {
+                buf.append(IPv6Utils.canonize(request.getServerName()));
+            } else {
+                buf.append(request.getServerName());
+            }
         }
     }
 
@@ -1649,7 +1685,7 @@ public abstract class AbstractAccessLogValve extends ValveBase implements Access
         case 'a':
             return new RemoteAddrElement();
         case 'A':
-            return new LocalAddrElement();
+            return new LocalAddrElement(ipv6Canonical);
         case 'b':
             return new ByteSentElement(true);
         case 'B':

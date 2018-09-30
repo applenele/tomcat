@@ -4,17 +4,17 @@ Firstly, thanks for your interest in contributing! I hope that this will be a
 pleasant first experience for you, and that you will return to continue
 contributing.
 
-Please visit our [Get Involved page](http://tomcat.apache.org/getinvolved.html)
+Please visit our [Get Involved page](https://tomcat.apache.org/getinvolved.html)
 for more information on how to contribute.
 
 ## Code of Conduct
 
 This project and everyone participating in it is governed by the Apache
 software Foundation's
-[Code of Conduct](http://www.apache.org/foundation/policies/conduct.html). By
+[Code of Conduct](https://www.apache.org/foundation/policies/conduct.html). By
 participating, you are expected to adhere to this code. If you are aware of
 unacceptable behavior, please visit the
-[Reporting Guidelines page](http://www.apache.org/foundation/policies/conduct.html#reporting-guidelines)
+[Reporting Guidelines page](https://www.apache.org/foundation/policies/conduct.html#reporting-guidelines)
 and follow the instructions there.
 
 ## How Can I Contribute?
@@ -25,7 +25,7 @@ for us to fix.
 
 ### Reporting Bugs
 
-Please review our [guide](http://tomcat.apache.org/bugreport.html) on how to
+Please review our [guide](https://tomcat.apache.org/bugreport.html) on how to
 submit a bug report. This page also has links to other resources to assist
 you.
 
@@ -36,7 +36,7 @@ you.
 Unsure where to begin contributing to Tomcat? You can start by taking a look at
 the issues marked 'Beginner', link below. Please note that the Beginner keyword
 is pretty new to the project, so if there aren't any issues in the filter feel
-free to ask on the [dev list](http://tomcat.apache.org/lists.html#tomcat-dev).
+free to ask on the [dev list](https://tomcat.apache.org/lists.html#tomcat-dev).
 
 * [Beginner issues](https://bz.apache.org/bugzilla/buglist.cgi?bug_status=NEW&bug_status=ASSIGNED&bug_status=REOPENED&bug_status=NEEDINFO&keywords=Beginner&keywords_type=allwords&list_id=160824&product=Tomcat%207&product=Tomcat%208&product=Tomcat%209&query_format=advanced) -
 issues which should only require a few lines of code, and a test or two to
@@ -53,7 +53,7 @@ Tomcat Connectors products in Bugzilla.
 Excited yet? This section will guide you through providing a patch to the
 committers of the project for review and acceptance.
 
-##### Chose Your Method of Submission
+##### Choose Your Method of Submission
 
 You can provide a patch in one of the following ways (in order of preference):
 
@@ -77,23 +77,26 @@ This method works if you want to submit a patch (like you would do for SVN), but
 the difference in using the sources distribution and a VCS is that you have to
 manually generate the patch file by using diff. If this is what you want, you
 can download the sources from the "Source Code Distributions" section of the
-[Download Page](https://tomcat.apache.org/download-90.cgi).
+Download Page. There is one such page for every major Tomcat version:
+- [Tomcat 9](https://tomcat.apache.org/download-90.cgi)
+- [Tomcat 8](https://tomcat.apache.org/download-80.cgi)
+- [Tomcat 7](https://tomcat.apache.org/download-70.cgi)
 
 ###### SVN
 
 If you have chosen to attach a patch to the Bugzilla issue (or email
 one), then you'll need to checkout the SVN version. Instructions for new
 committers to learn how to do this are found
-[here](http://www.apache.org/dev/contributors.html#svnbasics). However, in the
+[here](https://www.apache.org/dev/contributors.html#svnbasics). However, in the
 interest of a fast ramp up, the short version is below. Note that the root of
 the SVN repository is
-[tomcat/trunk](http://svn.apache.org/repos/asf/tomcat/trunk),
+[tomcat/trunk](https://svn.apache.org/repos/asf/tomcat/trunk),
 but you can clone specific versions too, such as
-[tc8.5.x](http://svn.apache.org/repos/asf/tomcat/tc8.5.x/trunk/) or even tags (
-[TOMCAT_8_5_15](http://svn.apache.org/repos/asf/tomcat/tc8.5.x/tags/TOMCAT_8_5_15/)).
+[tc8.5.x](https://svn.apache.org/repos/asf/tomcat/tc8.5.x/trunk/) or even tags (
+[TOMCAT_8_5_15](https://svn.apache.org/repos/asf/tomcat/tc8.5.x/tags/TOMCAT_8_5_15/)).
 
 ```
-$ svn co http://svn.apache.org/repos/asf/tomcat/trunk/
+$ svn co https://svn.apache.org/repos/asf/tomcat/trunk/
 ```
 
 ##### Github

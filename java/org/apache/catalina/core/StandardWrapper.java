@@ -14,8 +14,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
-
 package org.apache.catalina.core;
 
 import java.io.PrintStream;
@@ -43,11 +41,9 @@ import javax.servlet.Servlet;
 import javax.servlet.ServletConfig;
 import javax.servlet.ServletContext;
 import javax.servlet.ServletException;
-import javax.servlet.ServletSecurityElement;
 import javax.servlet.SingleThreadModel;
 import javax.servlet.UnavailableException;
 import javax.servlet.annotation.MultipartConfig;
-import javax.servlet.annotation.ServletSecurity;
 
 import org.apache.catalina.Container;
 import org.apache.catalina.ContainerServlet;
@@ -78,7 +74,7 @@ import org.apache.tomcat.util.modeler.Util;
 public class StandardWrapper extends ContainerBase
     implements ServletConfig, Wrapper, NotificationEmitter {
 
-    private static final Log log = LogFactory.getLog(StandardWrapper.class);
+    private final Log log = LogFactory.getLog(StandardWrapper.class); // must not be static
 
     protected static final String[] DEFAULT_SERVLET_METHODS = new String[] {
                                                     "GET", "HEAD", "POST" };
@@ -256,8 +252,6 @@ public class StandardWrapper extends ContainerBase
      * Enabled
      */
     protected boolean enabled = true;
-
-    protected volatile boolean servletSecurityAnnotationScanRequired = false;
 
     private boolean overridable = false;
 
@@ -562,28 +556,34 @@ public class StandardWrapper extends ContainerBase
         }
 
         Set<String> allow = new HashSet<>();
-        allow.add("TRACE");
         allow.add("OPTIONS");
 
-        Method[] methods = getAllDeclaredMethods(servletClazz);
-        for (int i=0; methods != null && i<methods.length; i++) {
-            Method m = methods[i];
+        if (isJspServlet) {
+            allow.add("GET");
+            allow.add("HEAD");
+            allow.add("POST");
+        } else {
+            allow.add("TRACE");
 
-            if (m.getName().equals("doGet")) {
-                allow.add("GET");
-                allow.add("HEAD");
-            } else if (m.getName().equals("doPost")) {
-                allow.add("POST");
-            } else if (m.getName().equals("doPut")) {
-                allow.add("PUT");
-            } else if (m.getName().equals("doDelete")) {
-                allow.add("DELETE");
+            Method[] methods = getAllDeclaredMethods(servletClazz);
+            for (int i=0; methods != null && i<methods.length; i++) {
+                Method m = methods[i];
+
+                if (m.getName().equals("doGet")) {
+                    allow.add("GET");
+                    allow.add("HEAD");
+                } else if (m.getName().equals("doPost")) {
+                    allow.add("POST");
+                } else if (m.getName().equals("doPut")) {
+                    allow.add("PUT");
+                } else if (m.getName().equals("doDelete")) {
+                    allow.add("DELETE");
+                }
             }
         }
 
         String[] methodNames = new String[allow.size()];
         return allow.toArray(methodNames);
-
     }
 
 
@@ -605,16 +605,7 @@ public class StandardWrapper extends ContainerBase
     }
 
 
-    /**
-     * {@inheritDoc}
-     */
-    @Override
-    public void setServletSecurityAnnotationScanRequired(boolean b) {
-        this.servletSecurityAnnotationScanRequired = b;
-    }
-
     // --------------------------------------------------------- Public Methods
-
 
     /**
      * Execute a periodic task, such as reloading, etc. This method will be
@@ -1050,7 +1041,7 @@ public class StandardWrapper extends ContainerBase
                 unavailable(null);
 
                 // Added extra log statement for Bugzilla 36630:
-                // http://bz.apache.org/bugzilla/show_bug.cgi?id=36630
+                // https://bz.apache.org/bugzilla/show_bug.cgi?id=36630
                 if(log.isDebugEnabled()) {
                     log.debug(sm.getString("standardWrapper.instantiate", servletClass), e);
                 }
@@ -1068,8 +1059,6 @@ public class StandardWrapper extends ContainerBase
                             new MultipartConfigElement(annotation);
                 }
             }
-
-            processServletSecurityAnnotation(servlet.getClass());
 
             // Special handling for ContainerServlet instances
             // Note: The InstanceManager checks if the application is permitted
@@ -1108,45 +1097,6 @@ public class StandardWrapper extends ContainerBase
 
     }
 
-    /**
-     * {@inheritDoc}
-     */
-    @Override
-    public void servletSecurityAnnotationScan() throws ServletException {
-        if (getServlet() == null) {
-            Class<?> clazz = null;
-            try {
-                clazz = ((Context) getParent()).getLoader().getClassLoader().loadClass(
-                        getServletClass());
-                processServletSecurityAnnotation(clazz);
-            } catch (ClassNotFoundException e) {
-                // Safe to ignore. No class means no annotations to process
-            }
-        } else {
-            if (servletSecurityAnnotationScanRequired) {
-                processServletSecurityAnnotation(getServlet().getClass());
-            }
-        }
-    }
-
-    private void processServletSecurityAnnotation(Class<?> clazz) {
-        // Calling this twice isn't harmful so no syncs
-        servletSecurityAnnotationScanRequired = false;
-
-        Context ctxt = (Context) getParent();
-
-        if (ctxt.getIgnoreAnnotations()) {
-            return;
-        }
-
-        ServletSecurity secAnnotation =
-            clazz.getAnnotation(ServletSecurity.class);
-        if (secAnnotation != null) {
-            ctxt.addServletSecurity(
-                    new ApplicationServletRegistration(this, ctxt),
-                    new ServletSecurityElement(secAnnotation));
-        }
-    }
 
     private synchronized void initServlet(Servlet servlet)
             throws ServletException {

@@ -164,7 +164,7 @@ public class JAASRealm extends RealmBase {
      */
     protected String configFile;
 
-    protected Configuration jaasConfiguration;
+    protected volatile Configuration jaasConfiguration;
     protected volatile boolean jaasConfigurationLoaded = false;
 
 
@@ -226,14 +226,8 @@ public class JAASRealm extends RealmBase {
     public void setContainer(Container container) {
         super.setContainer(container);
 
-        if( appName==null  ) {
-            String name = container.getName();
-            if (!name.startsWith("/")) {
-                name = "/" + name;
-            }
-            name = makeLegalForJAAS(name);
-
-            appName=name;
+        if (appName == null) {
+            appName = makeLegalForJAAS(container.getName());
 
             log.info("Set JAAS app name " + appName);
         }
@@ -451,7 +445,7 @@ public class JAASRealm extends RealmBase {
             return null;
         }
         if (log.isDebugEnabled()) {
-            log.debug(sm.getString("jaasRealm.authenticateSuccess", username));
+            log.debug(sm.getString("jaasRealm.authenticateSuccess", username, principal));
         }
 
         return principal;
@@ -538,6 +532,7 @@ public class JAASRealm extends RealmBase {
                 log.debug(sm.getString("jaasRealm.userPrincipalFailure"));
                 log.debug(sm.getString("jaasRealm.rolePrincipalFailure"));
             }
+            return null;
         } else {
             if (roles.size() == 0) {
                 if (log.isDebugEnabled()) {
@@ -606,6 +601,8 @@ public class JAASRealm extends RealmBase {
      * @return the loaded configuration
      */
     protected Configuration getConfig() {
+        // Local copy to avoid possible NPE due to concurrent change
+        String configFile = this.configFile;
         try {
             if (jaasConfigurationLoaded) {
                 return jaasConfiguration;
@@ -615,8 +612,7 @@ public class JAASRealm extends RealmBase {
                     jaasConfigurationLoaded = true;
                     return null;
                 }
-                URL resource = Thread.currentThread().getContextClassLoader().
-                        getResource(configFile);
+                URL resource = Thread.currentThread().getContextClassLoader().getResource(configFile);
                 URI uri = resource.toURI();
                 @SuppressWarnings("unchecked")
                 Class<Configuration> sunConfigFile = (Class<Configuration>)

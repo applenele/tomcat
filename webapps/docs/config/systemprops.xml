@@ -218,7 +218,7 @@
     </property>
 
     <property name="org.apache.jasper.Constants. JSP_PACKAGE_NAME">
-      <p>The default package name for compiled jsp pages.</p>
+      <p>The default package name for compiled JSPs.</p>
       <p>If not specified, the default value of <code>org.apache.jsp</code>
       will be used.</p>
     </property>
@@ -474,6 +474,7 @@
          <li>too many headers, too many parameters (hitting
            <code>maxHeaderCount</code> or <code>maxParameterCount</code> limits
            of a <a href="http.html">connector</a>).</li>
+         <li>invalid host names</li>
          </ul>
          <p>Other errors triggered by invalid input data may be added to this
          system in later versions.</p>
@@ -579,7 +580,7 @@
       <code>javax.sql.DataSource</code>. If not specified the default of
       <code>org.apache.tomcat.dbcp.dbcp2.BasicDataSourceFactory</code> is used
       which is a package renamed (to avoid conflicts) copy of
-      <a href="http://commons.apache.org/dbcp">Apache Commons DBCP</a>.</p>
+      <a href="https://commons.apache.org/dbcp">Apache Commons DBCP 2</a>.</p>
     </property>
 
     <property name="javax.mail.Session.Factory">

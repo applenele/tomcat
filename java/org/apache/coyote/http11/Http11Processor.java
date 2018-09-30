@@ -48,11 +48,10 @@ import org.apache.juli.logging.LogFactory;
 import org.apache.tomcat.util.ExceptionUtils;
 import org.apache.tomcat.util.buf.Ascii;
 import org.apache.tomcat.util.buf.ByteChunk;
-import org.apache.tomcat.util.buf.HexUtils;
 import org.apache.tomcat.util.buf.MessageBytes;
 import org.apache.tomcat.util.http.FastHttpDateFormat;
 import org.apache.tomcat.util.http.MimeHeaders;
-import org.apache.tomcat.util.http.parser.Host;
+import org.apache.tomcat.util.http.parser.HttpParser;
 import org.apache.tomcat.util.log.UserDataHelper;
 import org.apache.tomcat.util.net.AbstractEndpoint.Handler.SocketState;
 import org.apache.tomcat.util.net.SSLSupport;
@@ -74,8 +73,6 @@ public class Http11Processor extends AbstractProcessor {
 
     private final AbstractHttp11Protocol<?> protocol;
 
-    private final UserDataHelper userDataHelper;
-
     /**
      * Input.
      */
@@ -86,6 +83,9 @@ public class Http11Processor extends AbstractProcessor {
      * Output.
      */
     private final Http11OutputBuffer outputBuffer;
+
+
+    private final HttpParser httpParser;
 
 
     /**
@@ -133,12 +133,6 @@ public class Http11Processor extends AbstractProcessor {
 
 
     /**
-     * Host name (used to avoid useless B2C conversion on the host name).
-     */
-    private char[] hostNameC = new char[0];
-
-
-    /**
      * Instance of the new protocol to use after the HTTP connection has been
      * upgraded.
      */
@@ -155,10 +149,11 @@ public class Http11Processor extends AbstractProcessor {
         super(adapter);
         this.protocol = protocol;
 
-        userDataHelper = new UserDataHelper(log);
+        httpParser = new HttpParser(protocol.getRelaxedPathChars(),
+                protocol.getRelaxedQueryChars());
 
         inputBuffer = new Http11InputBuffer(request, protocol.getMaxHttpHeaderSize(),
-                protocol.getRejectIllegalHeaderName());
+                protocol.getRejectIllegalHeaderName(), httpParser);
         request.setInputBuffer(inputBuffer);
 
         outputBuffer = new Http11OutputBuffer(response, protocol.getMaxHttpHeaderSize());
@@ -349,7 +344,6 @@ public class Http11Processor extends AbstractProcessor {
                 // 400 - Bad Request
                 response.setStatus(400);
                 setErrorState(ErrorState.CLOSE_CLEAN, t);
-                getAdapter().log(request, response, 0);
             }
 
             // Has an upgrade been requested?
@@ -367,8 +361,6 @@ public class Http11Processor extends AbstractProcessor {
                 UpgradeProtocol upgradeProtocol = protocol.getUpgradeProtocol(requestedProtocol);
                 if (upgradeProtocol != null) {
                     if (upgradeProtocol.accept(request)) {
-                        // TODO Figure out how to handle request bodies at this
-                        // point.
                         response.setStatus(HttpServletResponse.SC_SWITCHING_PROTOCOLS);
                         response.setHeader("Connection", "Upgrade");
                         response.setHeader("Upgrade", requestedProtocol);
@@ -385,7 +377,7 @@ public class Http11Processor extends AbstractProcessor {
                 }
             }
 
-            if (!getErrorState().isError()) {
+            if (getErrorState().isIoAllowed()) {
                 // Setting up filters, and parse some request headers
                 rp.setStage(org.apache.coyote.Constants.STAGE_PREPARE);
                 try {
@@ -398,7 +390,6 @@ public class Http11Processor extends AbstractProcessor {
                     // 500 - Internal Server Error
                     response.setStatus(500);
                     setErrorState(ErrorState.CLOSE_CLEAN, t);
-                    getAdapter().log(request, response, 0);
                 }
             }
 
@@ -411,7 +402,7 @@ public class Http11Processor extends AbstractProcessor {
             }
 
             // Process the request in the adapter
-            if (!getErrorState().isError()) {
+            if (getErrorState().isIoAllowed()) {
                 try {
                     rp.setStage(org.apache.coyote.Constants.STAGE_SERVICE);
                     getAdapter().service(request, response);
@@ -537,7 +528,6 @@ public class Http11Processor extends AbstractProcessor {
                 // Partially processed the request so need to respond
                 response.setStatus(503);
                 setErrorState(ErrorState.CLOSE_CLEAN, null);
-                getAdapter().log(request, response, 0);
                 return false;
             } else {
                 // Need to keep processor associated with socket
@@ -577,7 +567,6 @@ public class Http11Processor extends AbstractProcessor {
         }
         MessageBytes protocolMB = request.protocol();
         if (protocolMB.equals(Constants.HTTP_11)) {
-            http11 = true;
             protocolMB.setString(Constants.HTTP_11);
         } else if (protocolMB.equals(Constants.HTTP_10)) {
             http11 = false;
@@ -661,37 +650,67 @@ public class Http11Processor extends AbstractProcessor {
             response.setStatus(400);
             setErrorState(ErrorState.CLOSE_CLEAN, null);
             if (log.isDebugEnabled()) {
-                log.debug(sm.getString("http11processor.request.prepare")+
-                          " host header missing");
+                log.debug(sm.getString("http11processor.request.noHostHeader"));
             }
         }
 
-        // Check for a full URI (including protocol://host:port/)
+        // Check for an absolute-URI less the query string which has already
+        // been removed during the parsing of the request line
         ByteChunk uriBC = request.requestURI().getByteChunk();
+        byte[] uriB = uriBC.getBytes();
         if (uriBC.startsWithIgnoreCase("http", 0)) {
-
-            int pos = uriBC.indexOf("://", 0, 3, 4);
-            int uriBCStart = uriBC.getStart();
-            int slashPos = -1;
-            if (pos != -1) {
+            int pos = 4;
+            // Check for https
+            if (uriBC.startsWithIgnoreCase("s", pos)) {
+                pos++;
+            }
+            // Next 3 characters must be "://"
+            if (uriBC.startsWith("://", pos)) {
                 pos += 3;
-                byte[] uriB = uriBC.getBytes();
-                slashPos = uriBC.indexOf('/', pos);
+                int uriBCStart = uriBC.getStart();
+
+                // '/' does not appear in the authority so use the first
+                // instance to split the authority and the path segments
+                int slashPos = uriBC.indexOf('/', pos);
+                // '@' in the authority delimits the userinfo
                 int atPos = uriBC.indexOf('@', pos);
+                if (slashPos > -1 && atPos > slashPos) {
+                    // First '@' is in the path segments so no userinfo
+                    atPos = -1;
+                }
+
                 if (slashPos == -1) {
                     slashPos = uriBC.getLength();
-                    // Set URI as "/"
-                    request.requestURI().setBytes
-                        (uriB, uriBCStart + pos - 2, 1);
+                    // Set URI as "/". Use 6 as it will always be a '/'.
+                    // 01234567
+                    // http://
+                    // https://
+                    request.requestURI().setBytes(uriB, uriBCStart + 6, 1);
                 } else {
-                    request.requestURI().setBytes
-                        (uriB, uriBCStart + slashPos,
-                         uriBC.getLength() - slashPos);
+                    request.requestURI().setBytes(uriB, uriBCStart + slashPos, uriBC.getLength() - slashPos);
                 }
+
                 // Skip any user info
                 if (atPos != -1) {
+                    // Validate the userinfo
+                    for (; pos < atPos; pos++) {
+                        byte c = uriB[uriBCStart + pos];
+                        if (!HttpParser.isUserInfo(c)) {
+                            // Strictly there needs to be a check for valid %nn
+                            // encoding here but skip it since it will never be
+                            // decoded because the userinfo is ignored
+                            response.setStatus(400);
+                            setErrorState(ErrorState.CLOSE_CLEAN, null);
+                            if (log.isDebugEnabled()) {
+                                log.debug(sm.getString("http11processor.request.invalidUserInfo"));
+                            }
+                            break;
+                        }
+                    }
+                    // Skip the '@'
                     pos = atPos + 1;
                 }
+
                 if (http11) {
                     // Missing host header is illegal but handled above
                     if (hostValueMB != null) {
@@ -724,6 +743,25 @@ public class Http11Processor extends AbstractProcessor {
                     hostValueMB = headers.setValue("host");
                     hostValueMB.setBytes(uriB, uriBCStart + pos, slashPos - pos);
                 }
+            } else {
+                response.setStatus(400);
+                setErrorState(ErrorState.CLOSE_CLEAN, null);
+                if (log.isDebugEnabled()) {
+                    log.debug(sm.getString("http11processor.request.invalidScheme"));
+                }
+            }
+        }
+
+        // Validate the characters in the URI. %nn decoding will be checked at
+        // the point of decoding.
+        for (int i = uriBC.getStart(); i < uriBC.getEnd(); i++) {
+            if (!httpParser.isAbsolutePathRelaxed(uriB[i])) {
+                response.setStatus(400);
+                setErrorState(ErrorState.CLOSE_CLEAN, null);
+                if (log.isDebugEnabled()) {
+                    log.debug(sm.getString("http11processor.request.invalidUri"));
+                }
+                break;
             }
         }
 
@@ -762,24 +800,23 @@ public class Http11Processor extends AbstractProcessor {
                 headers.removeHeader("content-length");
                 request.setContentLength(-1);
             } else {
-                inputBuffer.addActiveFilter
-                        (inputFilters[Constants.IDENTITY_FILTER]);
+                inputBuffer.addActiveFilter(inputFilters[Constants.IDENTITY_FILTER]);
                 contentDelimitation = true;
             }
         }
 
+        // Validate host name and extract port if present
         parseHost(hostValueMB);
 
         if (!contentDelimitation) {
             // If there's no content length
             // (broken HTTP/1.0 or HTTP/1.1), assume
             // the client is not broken and didn't send a body
-            inputBuffer.addActiveFilter
-                    (inputFilters[Constants.VOID_FILTER]);
+            inputBuffer.addActiveFilter(inputFilters[Constants.VOID_FILTER]);
             contentDelimitation = true;
         }
 
-        if (getErrorState().isError()) {
+        if (!getErrorState().isIoAllowed()) {
             getAdapter().log(request, response, 0);
         }
     }
@@ -973,92 +1010,22 @@ public class Http11Processor extends AbstractProcessor {
         }
     }
 
+
     /**
-     * Parse host.
+     * {@inheritDoc}
+     * <p>
+     * This implementation provides the server name from the default host and
+     * the server port from the local port.
      */
-    private void parseHost(MessageBytes valueMB) {
+    @Override
+    protected void populateHost() {
+        // No host information (HTTP/1.0)
+        // Ensure the local port field is populated before using it.
+        request.action(ActionCode.REQ_LOCALPORT_ATTRIBUTE, request);
+        request.setServerPort(request.getLocalPort());
 
-        if (valueMB == null || valueMB.isNull()) {
-            // HTTP/1.0
-            // If no host header, use the port info from the endpoint
-            // The host will be obtained lazily from the socket if required
-            // using ActionCode#REQ_LOCAL_NAME_ATTRIBUTE
-            request.setServerPort(protocol.getPort());
-            return;
-        }
-
-        ByteChunk valueBC = valueMB.getByteChunk();
-        byte[] valueB = valueBC.getBytes();
-        int valueL = valueBC.getLength();
-        int valueS = valueBC.getStart();
-        int colonPos = -1;
-        if (hostNameC.length < valueL) {
-            hostNameC = new char[valueL];
-        }
-
-        // TODO
-        // To minimise breakage to existing systems, just report any errors. In
-        // a future release this will switch to returning a 400 response.
-        // Depending on user feedback, the 400 response may be made optional.
-        try {
-            Host.parse(valueMB);
-        } catch (IOException | IllegalArgumentException e) {
-            // IOException should never happen
-            // IllegalArgumentException indicates that the host name is invalid
-            UserDataHelper.Mode logMode = userDataHelper.getNextMode();
-            if (logMode != null) {
-                String message = sm.getString("http11processor.host.parse",
-                        valueMB.toString(), e.getMessage());
-                switch (logMode) {
-                    case INFO_THEN_DEBUG:
-                        message += sm.getString("http11processor.fallToDebug");
-                        //$FALL-THROUGH$
-                    case INFO:
-                        log.info(message, e);
-                        break;
-                    case DEBUG:
-                        log.debug(message, e);
-                }
-            }
-        }
-
-        boolean ipv6 = (valueB[valueS] == '[');
-        boolean bracketClosed = false;
-        for (int i = 0; i < valueL; i++) {
-            char b = (char) valueB[i + valueS];
-            hostNameC[i] = b;
-            if (b == ']') {
-                bracketClosed = true;
-            } else if (b == ':') {
-                if (!ipv6 || bracketClosed) {
-                    colonPos = i;
-                    break;
-                }
-            }
-        }
-
-        if (colonPos < 0) {
-            request.serverName().setChars(hostNameC, 0, valueL);
-        } else {
-            request.serverName().setChars(hostNameC, 0, colonPos);
-
-            int port = 0;
-            int mult = 1;
-            for (int i = valueL - 1; i > colonPos; i--) {
-                int charValue = HexUtils.getDec(valueB[i + valueS]);
-                if (charValue == -1 || charValue > 9) {
-                    // Invalid character
-                    // 400 - Bad request
-                    response.setStatus(400);
-                    setErrorState(ErrorState.CLOSE_CLEAN, null);
-                    break;
-                }
-                port = port + (charValue * mult);
-                mult = 10 * mult;
-            }
-            request.setServerPort(port);
-        }
-
+        // request.serverName() will be set to the default host name by the
+        // mapper
     }
 
 
@@ -1190,8 +1157,6 @@ public class Http11Processor extends AbstractProcessor {
     @Override
     protected final void setRequestBody(ByteChunk body) {
         InputFilter savedBody = new SavedRequestInputFilter(body);
-        savedBody.setRequest(request);
-
         Http11InputBuffer internalBuffer = (Http11InputBuffer) request.getInputBuffer();
         internalBuffer.addActiveFilter(savedBody);
     }

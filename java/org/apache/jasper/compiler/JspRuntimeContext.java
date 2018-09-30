@@ -20,19 +20,22 @@ package org.apache.jasper.compiler;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FilePermission;
-import java.io.UnsupportedEncodingException;
+import java.io.IOException;
+import java.net.URISyntaxException;
 import java.net.URL;
 import java.net.URLClassLoader;
-import java.net.URLDecoder;
 import java.security.CodeSource;
 import java.security.PermissionCollection;
 import java.security.Policy;
 import java.security.cert.Certificate;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import javax.servlet.ServletContext;
+import javax.servlet.ServletException;
 
 import org.apache.jasper.Constants;
 import org.apache.jasper.JspCompilationContext;
@@ -61,7 +64,7 @@ public final class JspRuntimeContext {
     /**
      * Logger
      */
-    private final Log log = LogFactory.getLog(JspRuntimeContext.class);
+    private final Log log = LogFactory.getLog(JspRuntimeContext.class); // must not be static
 
     /**
      * Counts how many times the webapp's JSPs have been reloaded.
@@ -175,6 +178,11 @@ public final class JspRuntimeContext {
      * so a web application scoped Map is required.
      */
     private final Map<String,SmapStratum> smaps = new ConcurrentHashMap<>();
+
+    /**
+     * Flag that indicates if a background compilation check is in progress.
+     */
+    private volatile boolean compileCheckInProgress = false;
 
 
     // ------------------------------------------------------ Public Methods
@@ -361,6 +369,11 @@ public final class JspRuntimeContext {
             return;
         }
 
+        List<JspServletWrapper> wrappersToReload = new ArrayList<>();
+        // Tell JspServletWrapper to ignore the reload attribute while this
+        // check is in progress. See BZ 62603.
+        compileCheckInProgress = true;
+
         Object [] wrappers = jsps.values().toArray();
         for (int i = 0; i < wrappers.length; i++ ) {
             JspServletWrapper jsw = (JspServletWrapper)wrappers[i];
@@ -370,6 +383,9 @@ public final class JspRuntimeContext {
             synchronized(jsw) {
                 try {
                     ctxt.compile();
+                    if (jsw.getReload()) {
+                        wrappersToReload.add(jsw);
+                    }
                 } catch (FileNotFoundException ex) {
                     ctxt.incrementRemoved();
                 } catch (Throwable t) {
@@ -380,6 +396,31 @@ public final class JspRuntimeContext {
             }
         }
 
+        // See BZ 62603.
+        // OK to process reload flag now.
+        compileCheckInProgress = false;
+        // Ensure all servlets and tags that need to be reloaded, are reloaded.
+        for (JspServletWrapper jsw : wrappersToReload) {
+            // Triggers reload
+            try {
+                if (jsw.isTagFile()) {
+                    // Although this is a public method, all other paths to this
+                    // method use this sync and it is required to prevent race
+                    // conditions during the reload.
+                    synchronized (this) {
+                        jsw.loadTagFile();
+                    }
+                } else {
+                    jsw.getServlet();
+                }
+            } catch (ServletException e) {
+                jsw.getServletContext().log("Servlet reload failed", e);
+            }
+        }
+    }
+
+    public boolean isCompileCheckInProgress() {
+        return compileCheckInProgress;
     }
 
     /**
@@ -424,10 +465,10 @@ public final class JspRuntimeContext {
                     try {
                         // Need to decode the URL, primarily to convert %20
                         // sequences back to spaces
-                        String decoded = URLDecoder.decode(urls[i].getPath(), "UTF-8");
+                        String decoded = urls[i].toURI().getPath();
                         cpath.append(decoded + File.pathSeparator);
-                    } catch (UnsupportedEncodingException e) {
-                        // All JREs are required to support UTF-8
+                    } catch (URISyntaxException e) {
+                        log.warn(Localizer.getMessage("jsp.warning.classpathUrl"), e);
                     }
                 }
             }
@@ -517,7 +558,7 @@ public final class JspRuntimeContext {
                 // Allow the JSP to access org.apache.jasper.runtime.HttpJspBase
                 permissions.add( new RuntimePermission(
                     "accessClassInPackage.org.apache.jasper.runtime") );
-            } catch(Exception e) {
+            } catch(RuntimeException | IOException e) {
                 context.log("Security Init for context failed",e);
             }
         }

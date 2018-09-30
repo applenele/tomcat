@@ -34,9 +34,7 @@ import java.util.Enumeration;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.TimeZone;
 import java.util.Vector;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 
 import javax.servlet.ServletOutputStream;
@@ -49,7 +47,6 @@ import javax.servlet.http.HttpServletResponseWrapper;
 import org.apache.catalina.Context;
 import org.apache.catalina.Globals;
 import org.apache.catalina.Session;
-import org.apache.catalina.Wrapper;
 import org.apache.catalina.security.SecurityUtil;
 import org.apache.catalina.util.SessionConfig;
 import org.apache.coyote.ActionCode;
@@ -97,7 +94,10 @@ public class Response implements HttpServletResponse {
 
     /**
      * The date format we will use for creating date headers.
+     *
+     * @deprecated Unused. This will be removed in Tomcat 10
      */
+    @Deprecated
     protected SimpleDateFormat format = null;
 
 
@@ -179,37 +179,6 @@ public class Response implements HttpServletResponse {
      */
     private boolean isCharacterEncodingSet = false;
 
-    /**
-     * With the introduction of async processing and the possibility of
-     * non-container threads calling sendError() tracking the current error
-     * state and ensuring that the correct error page is called becomes more
-     * complicated. This state attribute helps by tracking the current error
-     * state and informing callers that attempt to change state if the change
-     * was successful or if another thread got there first.
-     *
-     * <pre>
-     * The state machine is very simple:
-     *
-     * 0 - NONE
-     * 1 - NOT_REPORTED
-     * 2 - REPORTED
-     *
-     *
-     *   -->---->-- >NONE
-     *   |   |        |
-     *   |   |        | setError()
-     *   ^   ^        |
-     *   |   |       \|/
-     *   |   |-<-NOT_REPORTED
-     *   |            |
-     *   ^            | report()
-     *   |            |
-     *   |           \|/
-     *   |----<----REPORTED
-     * </pre>
-     */
-    private final AtomicInteger errorState = new AtomicInteger(0);
-
 
     /**
      * Using output stream flag.
@@ -258,7 +227,6 @@ public class Response implements HttpServletResponse {
         usingWriter = false;
         appCommitted = false;
         included = false;
-        errorState.set(0);
         isCharacterEncodingSet = false;
 
         applicationResponse = null;
@@ -438,14 +406,7 @@ public class Response implements HttpServletResponse {
      * @return <code>false</code> if the error flag was already set
      */
     public boolean setError() {
-        boolean result = errorState.compareAndSet(0, 1);
-        if (result) {
-            Wrapper wrapper = getRequest().getWrapper();
-            if (wrapper != null) {
-                wrapper.incrementErrorCount();
-            }
-        }
-        return result;
+        return getCoyoteResponse().setError();
     }
 
 
@@ -455,17 +416,17 @@ public class Response implements HttpServletResponse {
      * @return <code>true</code> if the response has encountered an error
      */
     public boolean isError() {
-        return errorState.get() > 0;
+        return getCoyoteResponse().isError();
     }
 
 
     public boolean isErrorReportRequired() {
-        return errorState.get() == 1;
+        return getCoyoteResponse().isErrorReportRequired();
     }
 
 
     public boolean setErrorReported() {
-        return errorState.compareAndSet(1, 2);
+        return getCoyoteResponse().setErrorReported();
     }
 
 
@@ -879,12 +840,17 @@ public class Response implements HttpServletResponse {
             return;
         }
 
-        String charset = getContext().getCharset(locale);
-        if (charset != null) {
-            try {
-                getCoyoteResponse().setCharacterEncoding(charset);
-            } catch (UnsupportedEncodingException e) {
-                log.warn(sm.getString("coyoteResponse.encoding.invalid", charset), e);
+        // In some error handling scenarios, the context is unknown
+        // (e.g. a 404 when a ROOT context is not present)
+        Context context = getContext();
+        if (context != null) {
+            String charset = context.getCharset(locale);
+            if (charset != null) {
+                try {
+                    getCoyoteResponse().setCharacterEncoding(charset);
+                } catch (UnsupportedEncodingException e) {
+                    log.warn(sm.getString("coyoteResponse.encoding.invalid", charset), e);
+                }
             }
         }
     }
@@ -1034,14 +1000,7 @@ public class Response implements HttpServletResponse {
             return;
         }
 
-        if (format == null) {
-            format = new SimpleDateFormat(FastHttpDateFormat.RFC1123_DATE,
-                                          Locale.US);
-            format.setTimeZone(TimeZone.getTimeZone("GMT"));
-        }
-
-        addHeader(name, FastHttpDateFormat.formatDate(value, format));
-
+        addHeader(name, FastHttpDateFormat.formatDate(value));
     }
 
 
@@ -1409,13 +1368,7 @@ public class Response implements HttpServletResponse {
             return;
         }
 
-        if (format == null) {
-            format = new SimpleDateFormat(FastHttpDateFormat.RFC1123_DATE,
-                                          Locale.US);
-            format.setTimeZone(TimeZone.getTimeZone("GMT"));
-        }
-
-        setHeader(name, FastHttpDateFormat.formatDate(value, format));
+        setHeader(name, FastHttpDateFormat.formatDate(value));
     }
 
 

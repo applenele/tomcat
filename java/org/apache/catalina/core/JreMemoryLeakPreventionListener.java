@@ -197,6 +197,21 @@ public class JreMemoryLeakPreventionListener implements LifecycleListener {
         // Initialise these classes when Tomcat starts
         if (Lifecycle.BEFORE_INIT_EVENT.equals(event.getType())) {
 
+            /*
+             * First call to this loads all drivers visible to the current class
+             * loader and its parents.
+             *
+             * Note: This is called before the context class loader is changed
+             *       because we want any drivers located in CATALINA_HOME/lib
+             *       and/or CATALINA_HOME/lib to be visible to DriverManager.
+             *       Users wishing to avoid having JDBC drivers loaded by this
+             *       class loader should add the JDBC driver(s) to the class
+             *       path so they are loaded by the system class loader.
+             */
+            if (driverManagerProtection) {
+                DriverManager.getDrivers();
+            }
+
             ClassLoader loader = Thread.currentThread().getContextClassLoader();
 
             try
@@ -205,14 +220,6 @@ public class JreMemoryLeakPreventionListener implements LifecycleListener {
                 // ClassLoader pinning we're about to do.
                 Thread.currentThread().setContextClassLoader(
                         ClassLoader.getSystemClassLoader());
-
-                /*
-                 * First call to this loads all drivers in the current class
-                 * loader
-                 */
-                if (driverManagerProtection) {
-                    DriverManager.getDrivers();
-                }
 
                 // Trigger the creation of the AWT (AWT-Windows, AWT-XAWT,
                 // etc.) thread.
@@ -349,9 +356,10 @@ public class JreMemoryLeakPreventionListener implements LifecycleListener {
                 }
 
                 /*
-                 * Present in Java 8 onwards
+                 * Present in Java 7 onwards
+                 * Fixed in Java 9 (from early access build 156)
                  */
-                if (forkJoinCommonPoolProtection) {
+                if (forkJoinCommonPoolProtection && !JreCompat.isJre9Available()) {
                     // Don't override any explicitly set property
                     if (System.getProperty(FORK_JOIN_POOL_THREAD_FACTORY_PROPERTY) == null) {
                         System.setProperty(FORK_JOIN_POOL_THREAD_FACTORY_PROPERTY,
